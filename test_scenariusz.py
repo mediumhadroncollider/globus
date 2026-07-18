@@ -88,9 +88,13 @@ sprawdz(
     pop_niczyje_koniec != pop_niczyje_start,
 )
 
-# 5. Podbój ziemi niczyjej zwraca None.
+# 5. Podbój ziemi niczyjej to jawna odmowa (nie ginie po cichu jak None,
+#    patrz zadanie 0002 — gracz musi wiedzieć, że kliknął źle).
 wynik_podboju = s.wykonaj_akcje({"typ": "podboj", "ziemia": -1, "panstwo": klucze.index("kent")})
-sprawdz("podbój ziemi niczyjej (ziemia=-1) zwraca None", wynik_podboju is None)
+sprawdz(
+    "podbój ziemi niczyjej (ziemia=-1) zwraca jawną odmowę",
+    isinstance(wynik_podboju, dict) and wynik_podboju.get("typ") == "odmowa",
+)
 
 print()
 print("WYNIK:", "wszystkie niezmienniki scenariusza OK" if OK else "SĄ BŁĘDY!")
