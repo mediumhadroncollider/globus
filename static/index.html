@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<title>Hegemon — oddychający kontynent</title>
+<!-- d3-delaunay: ta sama biblioteka Woronoja, której używaliśmy w prototypach.
+     Klient dostaje z serwera TYLKO punkty i sam odtwarza identyczną geometrię
+     (diagram Woronoja jest jednoznacznie wyznaczony przez punkty).
+     LEKCJA Z BŁĘDU: pierwsza wersja ładowała ten skrypt z CDN-u — z adresu,
+     który nie istniał (404). Skrypt się nie wczytał, "d3" nie powstało i cały
+     klient wywracał się po cichu. Teraz biblioteka leży W PROJEKCIE
+     (static/d3-delaunay.min.js): lokalna gra nie zależy od internetu, a wersja
+     nigdy nie zniknie ani się nie zmieni pod nami. -->
+<script src="/static/d3-delaunay.min.js"></script>
+<style>
+  /* Wygląd interfejsu — zwykły CSS, nic magicznego */
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #10151b; color: #e8e2d2;
+         font-family: Georgia, serif; overflow: hidden; }
+  #pasek { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+           padding: 10px 16px; border-bottom: 1px solid #2a2f36; }
+  #tytul { font-size: 17px; letter-spacing: .22em; text-transform: uppercase; }
+  #tytul span { color: #8a8272; font-size: 12px; letter-spacing: .08em; }
+  button, select { padding: 6px 12px; font-size: 12px; letter-spacing: .06em;
+    cursor: pointer; background: transparent; color: #d8d2c2;
+    border: 1px solid #4a4438; border-radius: 3px; font-family: inherit;
+    text-transform: uppercase; }
+  button.aktywny { background: #c9a227; color: #171512; border-color: #c9a227; }
+  select { text-transform: none; background: #171d24; }
+  #scena { position: relative; width: 100vw; height: calc(100vh - 53px); }
+  canvas { position: absolute; inset: 0; touch-action: none; }
+  .panel { position: absolute; background: rgba(16,20,26,.9);
+           border: 1px solid #3a3f47; border-radius: 4px; padding: 10px 14px;
+           font-size: 12px; pointer-events: none; line-height: 1.5; }
+  #info    { left: 14px; bottom: 14px; min-width: 240px; }
+  #ranking { right: 14px; top: 14px; min-width: 230px; }
+  #suwak-box { display: flex; align-items: center; gap: 8px; font-size: 12px;
+               color: #b8b0a0; }
+  input[type=range] { width: 130px; accent-color: #c9a227; }
+  .zloto { color: #c9a227; }
+  .szary { color: #8a8272; }
+</style>
+</head>
+<body>
+
+<div id="pasek">
+  <div id="tytul">Hegemon <span>· żywy kontynent po WebSockecie</span></div>
+  <div style="flex:1"></div>
+  <button id="w-wladcy"  class="aktywny">Władcy</button>
+  <button id="w-pop">Populacja</button>
+  <button id="w-doch">Dochód</button>
+  <span class="szary">|</span>
+  <span class="szary">Grasz jako:</span>
+  <select id="wybor-krol"></select>
+  <div id="suwak-box">
+    podatek <input type="range" id="suwak" min="0" max="50" value="10">
+    <b id="suwak-val" class="zloto">10%</b>
+  </div>
+</div>
+
+<div id="scena">
+  <canvas id="mapa"></canvas>
+  <div class="panel" id="info">Łączę się ze światem…</div>
+  <div class="panel" id="ranking"></div>
+</div>
+
+<script>
+"use strict";
+(async () => {
+// Pomocnik diagnostyczny: pokazuje etapy startu i KAŻDY błąd wprost w panelu.
+// Dzięki temu awaria nigdy nie wygląda jak wieczne "łączę się…".
+const _info = document.getElementById("info");
+const etap = (t) => { _info.textContent = t; };
+window.addEventListener("error", e => {
+  _info.innerHTML = "<b style='color:#e07050'>Błąd:</b> " + e.message;
+});
+try {
+
+/* ===========================================================================
+   1. POBRANIE ŚWIATA
+   Dwa zapytania: małe dane JSON-em, wielkie tablice jako czyste bajty.
+   =========================================================================== */
+if (typeof d3 === "undefined") {
+  throw new Error("nie wczytał się /static/d3-delaunay.min.js (sprawdź, czy plik jest w katalogu static/)");
+}
+etap("Pobieram opis świata…");
+const meta = await (await fetch("/api/meta")).json();
+etap("Pobieram tablice świata…");
+const buf  = await (await fetch("/api/dane")).arrayBuffer();
+
+const N = meta.n_komorek;
+// Nakładamy "widoki" na wspólny bufor bajtów — kolejność i typy MUSZĄ
+// odpowiadać temu, co skleja server.py (nasz mini-protokół binarny):
+const punkty  = new Float32Array(buf, 0,      N * 2);
+const komPow  = new Int32Array  (buf, N * 8,  N);
+const zyznosc = new Float32Array(buf, N * 12, N);
+const lad     = new Uint8Array  (buf, N * 16, N);
+
+// Zmienny stan przychodzący z serwera (aktualizowany na bieżąco):
+let powKrol  = Int32Array.from(meta.pow_krol);   // właściciel każdego powiatu
+let podatki  = Float64Array.from(meta.podatki);
+let powPop   = new Float64Array(meta.n_pow);     // wypełnią się po 1. ticku
+let powDoch  = new Float64Array(meta.n_pow);
+let skarbiec = new Float64Array(meta.n_krol);
+let krolDoch = new Float64Array(meta.n_krol);
+let nrTicka  = 0;
+
+/* ===========================================================================
+   2. GEOMETRIA: odtworzenie diagramu Woronoja z samych punktów
+   =========================================================================== */
+const W = meta.W, H = meta.H, RS = 2;   // RS = mnożnik rozdzielczości renderu
+etap("Odtwarzam diagram Woronoja z punktów…");
+const delaunay = new d3.Delaunay(punkty);
+const voronoi  = delaunay.voronoi([0, 0, W, H]);
+
+// Ścieżka każdego POWIATU = suma wielokątów jego komórek. Budujemy raz;
+// potem malowanie powiatu to jedno wywołanie fill(path) — to jest ten sam
+// "batching", który przy 150k komórkach uratował nam czas renderu.
+const sciezkaPow = Array.from({ length: meta.n_pow }, () => new Path2D());
+for (let c = 0; c < N; c++) {
+  if (lad[c]) voronoi.renderCell(c, sciezkaPow[komPow[c]]);
+}
+
+// Granice: krawędź Woronoja "wie", które dwie komórki rozdziela, więc od razu
+// wiemy, czy to wybrzeże, granica powiatu, czy państwa. Granice powiatów
+// i wybrzeże są stałe; granice KRÓLESTW zależą od własności, więc mają
+// funkcję przebudowy (wołaną po każdym podboju).
+const grPowiat = new Path2D(), grBrzeg = new Path2D();
+let grKrol = new Path2D();
+// zerwane sąsiedztwa (cieśniny z korekt ręcznych) — zbiór do szybkiego testu
+const zerwane = new Set((meta.zerwane || []).map(([a, b]) =>
+  a < b ? a * N + b : b * N + a));
+const { halfedges, triangles } = delaunay;
+const cc = voronoi.circumcenters;
+const krawedzie = [];   // [x1,y1,x2,y2, komórkaA, komórkaB] — do przebudów
+for (let e = 0; e < halfedges.length; e++) {
+  const opp = halfedges[e];
+  if (opp < e) continue;                       // każda krawędź tylko raz
+  const a = triangles[e];
+  const b = triangles[e % 3 === 2 ? e - 2 : e + 1];
+  const ta = (e / 3) | 0, tb = (opp / 3) | 0;
+  const x1 = cc[2*ta], y1 = cc[2*ta+1], x2 = cc[2*tb], y2 = cc[2*tb+1];
+  // klucz pary komórek: a*N+b mieści się bez strat w liczbie JS (N^2 < 2^53)
+  const paraKlucz = (a < b ? a * N + b : b * N + a);
+  if (lad[a] !== lad[b] || zerwane.has(paraKlucz)) {
+    // prawdziwe wybrzeże ALBO cieśnina zerwana ręcznie w generatorze —
+    // wizualnie jedno i drugie to woda, więc rysujemy tą samą kreską
+    grBrzeg.moveTo(x1,y1); grBrzeg.lineTo(x2,y2);
+  }
+  else if (lad[a] && komPow[a] !== komPow[b]) {
+    grPowiat.moveTo(x1,y1); grPowiat.lineTo(x2,y2);
+    krawedzie.push([x1,y1,x2,y2,a,b]);
+  }
+}
+function przebudujGraniceKrolestw() {
+  grKrol = new Path2D();
+  for (const [x1,y1,x2,y2,a,b] of krawedzie) {
+    if (powKrol[komPow[a]] !== powKrol[komPow[b]]) {
+      grKrol.moveTo(x1,y1); grKrol.lineTo(x2,y2);
+    }
+  }
+}
+przebudujGraniceKrolestw();
+
+/* ===========================================================================
+   3. KOLORY I WARSTWY RENDEROWANIA
+   =========================================================================== */
+// paleta królestw: równe kroki po kole barw (działa dla dowolnego n_krol)
+const kolorKrol = Array.from({ length: meta.n_krol },
+  (_, k) => `hsl(${(k * 360 / meta.n_krol) | 0} 34% 58%)`);
+
+// mapa ciepła dla populacji/dochodu: granat -> złoto (prosty lerp dwóch barw)
+function cieplo(t) {
+  t = Math.max(0, Math.min(1, t));
+  const r = 30 + t * (231 - 30), g = 45 + t * (185 - 45), b = 80 + t * (69 - 80);
+  return `rgb(${r|0},${g|0},${b|0})`;
+}
+
+// Warstwa "władcy" zmienia się rzadko (tylko podboje) — trzymamy ją wypaloną
+// na niewidocznym canvasie i tylko kopiujemy. Mapy ciepła malujemy na żywo,
+// bo to ledwie ~2 tys. ścieżek powiatów.
+const wladcyCv = document.createElement("canvas");
+wladcyCv.width = W * RS; wladcyCv.height = H * RS;
+function wypalWladcow() {
+  const g = wladcyCv.getContext("2d");
+  g.setTransform(RS, 0, 0, RS, 0, 0);
+  g.fillStyle = "#26313c"; g.fillRect(0, 0, W, H);
+  g.lineWidth = 1;
+  for (let p = 0; p < meta.n_pow; p++) {
+    g.fillStyle = g.strokeStyle = kolorKrol[powKrol[p]];
+    g.fill(sciezkaPow[p]); g.stroke(sciezkaPow[p]);  // stroke zszywa szwy
+  }
+}
+wypalWladcow();
+
+/* ===========================================================================
+   4. RYSOWANIE NA EKRAN (kamera: pan + zoom)
+   =========================================================================== */
+const cv = document.getElementById("mapa");
+const scena = document.getElementById("scena");
+let kam = null, widok = "wladcy", hover = -1, przeciag = null;
+
+function dopasujKamere() {
+  const s = Math.min(scena.clientWidth / W, scena.clientHeight / H);
+  kam = { s, tx: (scena.clientWidth - W*s)/2, ty: (scena.clientHeight - H*s)/2, fit: s };
+}
+function rysuj() {
+  const dpr = window.devicePixelRatio || 1;
+  if (cv.width !== scena.clientWidth * dpr) {
+    cv.width = scena.clientWidth * dpr; cv.height = scena.clientHeight * dpr;
+  }
+  const g = cv.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.fillStyle = "#10151b"; g.fillRect(0, 0, scena.clientWidth, scena.clientHeight);
+  g.setTransform(kam.s*dpr, 0, 0, kam.s*dpr, kam.tx*dpr, kam.ty*dpr);
+
+  if (widok === "wladcy") {
+    g.drawImage(wladcyCv, 0, 0, W, H);
+  } else {
+    g.fillStyle = "#26313c";
+    g.fillRect(0, 0, W, H);
+    const dane = widok === "pop" ? powPop : powDoch;
+    // normalizacja "per widok": 95. percentyl jako maks, żeby jeden bogaty
+    // powiat nie spłaszczał całej skali barw
+    const kopia = Array.from(dane).sort((a, b) => a - b);
+    const max = kopia[(kopia.length * 0.95) | 0] || 1;
+    for (let p = 0; p < meta.n_pow; p++) {
+      g.fillStyle = g.strokeStyle = cieplo(dane[p] / max);
+      g.fill(sciezkaPow[p]); g.stroke(sciezkaPow[p]);
+    }
+  }
+
+  // granice — od najcieńszej. STAŁA SZEROKOŚĆ NA EKRANIE: rysujemy pod
+  // transformacją kamery (współrzędne świata), więc kreska o szerokości W
+  // miałaby na ekranie W×zoom pikseli i grubiałaby przy przybliżaniu.
+  // Antidotum: dzielimy przez skalę — szerokość w świecie maleje dokładnie
+  // tak, jak zoom rośnie, więc na ekranie kreska ma zawsze tyle samo pikseli
+  // (tak robią wszystkie mapy internetowe).
+  g.lineJoin = g.lineCap = "round";
+  g.strokeStyle = "rgba(20,16,10,.4)"; g.lineWidth = 0.7 / kam.s; g.stroke(grPowiat);
+  g.strokeStyle = "#1d1912";           g.lineWidth = 2.6 / kam.s; g.stroke(grKrol);
+  g.strokeStyle = "#171d24";           g.lineWidth = 1.9 / kam.s; g.stroke(grBrzeg);
+
+  // podświetlenie powiatu pod kursorem
+  if (hover >= 0) {
+    g.fillStyle = "rgba(255,250,235,.22)";
+    g.fill(sciezkaPow[hover]);
+  }
+}
+dopasujKamere(); rysuj();
+window.addEventListener("resize", () => { dopasujKamere(); rysuj(); });
+
+/* ===========================================================================
+   5. INTERAKCJA: hover, pan, zoom, podbój
+   =========================================================================== */
+function naSwiat(ev) {
+  const r = cv.getBoundingClientRect();
+  return [(ev.clientX - r.left - kam.tx) / kam.s,
+          (ev.clientY - r.top  - kam.ty) / kam.s];
+}
+cv.addEventListener("pointermove", ev => {
+  if (przeciag) {
+    kam.tx += ev.clientX - przeciag.x; kam.ty += ev.clientY - przeciag.y;
+    przeciag = { x: ev.clientX, y: ev.clientY };
+    rysuj(); return;
+  }
+  const [x, y] = naSwiat(ev);
+  let nowy = -1;
+  if (x >= 0 && y >= 0 && x <= W && y <= H) {
+    const c = delaunay.find(x, y);      // najbliższa komórka: superszybkie
+    if (lad[c]) nowy = komPow[c];
+  }
+  if (nowy !== hover) { hover = nowy; odswiezInfo(); rysuj(); }
+});
+cv.addEventListener("pointerdown", ev => {
+  przeciag = { x: ev.clientX, y: ev.clientY };
+  cv.setPointerCapture(ev.pointerId);
+});
+cv.addEventListener("pointerup", ev => {
+  przeciag = null;
+  // Shift+klik = podbój powiatu dla wybranego królestwa.
+  // Zauważ: klient NICZEGO nie zmienia sam — wysyła rozkaz, a prawda
+  // wraca z serwera (wiadomość "zmiana"). Jedno źródło prawdy = zero rozjazdów.
+  if (ev.shiftKey && hover >= 0) {
+    ws.send(JSON.stringify({ typ: "podboj", powiat: hover, krolestwo: mojeKrol() }));
+  }
+});
+cv.addEventListener("pointerleave", () => { przeciag = null; hover = -1; odswiezInfo(); rysuj(); });
+cv.addEventListener("wheel", ev => {
+  ev.preventDefault();
+  const r = cv.getBoundingClientRect();
+  const mx = ev.clientX - r.left, my = ev.clientY - r.top;
+  const f = ev.deltaY < 0 ? 1.15 : 1/1.15;
+  const ns = Math.min(kam.fit * 20, Math.max(kam.fit * 0.6, kam.s * f));
+  const k = ns / kam.s;
+  kam.tx = mx - (mx - kam.tx) * k; kam.ty = my - (my - kam.ty) * k; kam.s = ns;
+  rysuj();
+}, { passive: false });
+
+/* ===========================================================================
+   6. WEBSOCKET: nasłuch ticków i zmian
+   =========================================================================== */
+const ws = new WebSocket(`ws://${location.host}/ws`);
+ws.onmessage = ev => {
+  const m = JSON.parse(ev.data);
+  if (m.co === "tick") {
+    nrTicka = m.tick;
+    powPop = m.pow_pop; powDoch = m.pow_doch;
+    skarbiec = m.skarbiec; krolDoch = m.krol_doch; podatki = m.podatki;
+    odswiezRanking(); odswiezInfo();
+    if (widok !== "wladcy") rysuj();      // mapy ciepła żyją co tick
+  } else if (m.co === "zmiana" && m.typ === "podboj") {
+    powKrol[m.powiat] = m.krolestwo;      // serwer potwierdził — aktualizujemy
+    wypalWladcow(); przebudujGraniceKrolestw(); rysuj();
+  } else if (m.co === "zmiana" && m.typ === "podatek") {
+    podatki[m.krolestwo] = m.stawka;
+    if (m.krolestwo === mojeKrol()) synchronizujSuwak();
+  }
+};
+
+/* ===========================================================================
+   7. PANELE I STEROWANIE
+   =========================================================================== */
+const info = document.getElementById("info");
+const ranking = document.getElementById("ranking");
+const wybor = document.getElementById("wybor-krol");
+const suwak = document.getElementById("suwak");
+const suwakVal = document.getElementById("suwak-val");
+
+meta.nazwy_krol.forEach((n, k) => {
+  const o = document.createElement("option");
+  o.value = k; o.textContent = n;
+  wybor.appendChild(o);
+});
+const mojeKrol = () => +wybor.value;
+
+function synchronizujSuwak() {
+  suwak.value = Math.round(podatki[mojeKrol()] * 100);
+  suwakVal.textContent = suwak.value + "%";
+}
+wybor.onchange = synchronizujSuwak;
+suwak.oninput = () => {
+  suwakVal.textContent = suwak.value + "%";
+  ws.send(JSON.stringify({ typ: "podatek", krolestwo: mojeKrol(),
+                           stawka: suwak.value / 100 }));
+};
+synchronizujSuwak();
+
+function odswiezInfo() {
+  if (hover < 0) {
+    info.innerHTML = `<span class="szary">Najedź na powiat. Kółko = zoom,
+      przeciągnij = przesuń.<br><b>Shift+klik</b> = podbój dla Twojego
+      królestwa.</span>`;
+    return;
+  }
+  const k = powKrol[hover];
+  info.innerHTML =
+    `<span class="zloto" style="letter-spacing:.14em;text-transform:uppercase">
+       Królestwo ${meta.nazwy_krol[k]}</span><br>
+     <b style="font-size:15px">${meta.nazwy_pow[hover]}</b><br>
+     populacja: <b>${Math.round(powPop[hover]).toLocaleString("pl")}</b><br>
+     dochód/tick: <b>${(+powDoch[hover]).toFixed(1)}</b>`;
+}
+function odswiezRanking() {
+  const wiersze = meta.nazwy_krol.map((n, k) => ({ n, k, s: skarbiec[k] }))
+    .sort((a, b) => b.s - a.s)
+    .map(({ n, k, s }) =>
+      `<span style="color:${kolorKrol[k]}">■</span> ${n}
+       <span class="szary">pod. ${(podatki[k]*100)|0}%</span>
+       <b style="float:right">${Math.round(s).toLocaleString("pl")}</b>`)
+    .join("<br>");
+  ranking.innerHTML =
+    `<span class="szary">tick ${nrTicka} · skarbce</span><br>` + wiersze;
+}
+odswiezInfo();
+
+} catch (err) {
+  _info.innerHTML = "<b style='color:#e07050'>Błąd startu:</b> " + err.message;
+  console.error(err);
+}
+})();
+</script>
+</body>
+</html>
