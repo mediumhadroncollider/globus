@@ -93,6 +93,7 @@ def main():
     d = np.load("world.npz")
     meta = json.load(open("world_meta.json"))
     lonlat = d["lonlat"]        # (N,2) — kanoniczna tożsamość geograficzna komórki
+    punkty = d["punkty"]        # (N,2) — te same komórki, ale w pikselach "płótna"
     lad = d["lad"]
     n = len(lad)
 
@@ -161,12 +162,27 @@ def main():
     print(f"\nRazem: {ma_wlasciciela} komórek w państwach, "
           f"{int(lad.sum()) - ma_wlasciciela} komórek lądu niczyjego.")
 
+    # --- 4. KADR STARTOWY: żeby gracz nie musiał szukać Kentu na mapie Europy
+    # Bbox (w pikselach "płótna", ten sam układ co punkty/wybrzeże) obu
+    # państw, z marginesem — kotwiczony w geografii komórek, nie w stałych
+    # z generate_world.py (zasada 5 z CLAUDE.md).
+    maska_panstw = kom_panstwo != NIEZIEMIA
+    px = punkty[maska_panstw]
+    x0, y0 = float(px[:, 0].min()), float(px[:, 1].min())
+    x1, y1 = float(px[:, 0].max()), float(px[:, 1].max())
+    margines = 0.18 * max(x1 - x0, y1 - y0)
+    kadr_startowy = {
+        "x0": x0 - margines, "y0": y0 - margines,
+        "x1": x1 + margines, "y1": y1 + margines,
+    }
+
     json.dump({
         "rok": 800,
         "panstwa": PANSTWA,
         "ziemie": ziemie,
         "kom_panstwo": kom_panstwo.tolist(),
         "kom_ziemia": kom_ziemia.tolist(),
+        "kadr_startowy": kadr_startowy,
     }, open("scenariusz_800.json", "w"), ensure_ascii=False)
     print("Zapisano scenariusz_800.json")
 

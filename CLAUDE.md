@@ -11,10 +11,12 @@ materiał do nauki — **kod ma być obficie komentowany po polsku, poziom
 
 ```
 generate_world.py  → world.npz + world_meta.json   (jednorazowa budowa świata)
+scenariusz_800.py  → scenariusz_800.json            (warstwa historyczna: Kent i Sussex, rok 800)
 sim.py             → klasa Swiat                    (czysta symulacja NumPy)
 server.py          → FastAPI + WebSocket            (pętla ticków, rozgłaszanie)
 static/index.html  → klient canvas                  (Woronoj odtwarzany z punktów)
 test_ciesnin.py    → niezmienniki świata            (uruchamiać po każdej regeneracji)
+test_scenariusz.py → niezmienniki scenariusza       (uruchamiać po zmianie scenariusz_800.py/sim.py)
 ```
 
 ## Zasady fundamentalne
@@ -44,6 +46,14 @@ test_ciesnin.py    → niezmienniki świata            (uruchamiać po każdej r
    bloku, wyrównanie do 4 bajtów!); małe i częste — JSON po WebSockecie.
 8. **Determinizm:** wszystko z seedowanych RNG; ta sama konfiguracja = ten sam
    świat.
+9. **Ziemie niczyje ŻYJĄ.** Komórki bez właściciela mają normalną populację,
+   normalnie rosną (docelowo migrują) — tylko nie płacą danin i nie generują
+   decyzji dla gracza. Martwe tło zamieniłoby scenariusz w wyspę otoczoną
+   próżnią, a migracja przez granicę to kluczowa przyszła mechanika. Koszt
+   zerowy: tick i tak liczy wszystkie komórki jedną operacją wektorową —
+   "brak właściciela" to tylko `-1` w kolumnie własności, nie osobna ścieżka
+   kodu w pętli wzrostu. Ziemia niczyja nie ma podziału wewnętrznego (jedna
+   szara masa na mapie) — podział pojawi się dopiero, gdy ktoś ją zagarnie.
 
 ## Warstwa mapy — decyzje podjęte
 
@@ -63,6 +73,30 @@ test_ciesnin.py    → niezmienniki świata            (uruchamiać po każdej r
   modelu danych.
 - Biblioteki JS vendorowane lokalnie w `static/` (żadnych CDN-ów). Błędy
   klienta mają krzyczeć z ekranu (panel diagnostyczny), nie ginąć w konsoli.
+
+## Scenariusze
+
+- Jednostką polityczną SCENARIUSZA jest **ZIEMIA** (`kom_ziemia`), nie
+  proceduralny powiat. Proceduralne powiaty/księstwa/królestwa zostają w
+  `world.npz` nietknięte (przydadzą się do scenariuszy generycznych) —
+  scenariusz historyczny ich po prostu nie używa. Analogicznie: właścicielem
+  ziemi jest **PAŃSTWO**, nie proceduralne królestwo.
+- `Swiat.__init__` przyjmuje opcjonalny `plik_scenariusza` (domyślnie
+  `scenariusz_800.json`). Gdy plik istnieje obok — świat startuje w trybie
+  scenariusza; gdy nie — zachowuje się dokładnie jak dawniej (proceduralnie).
+  Oba tryby dzielą jeden `tick()` i jeden protokół binarny (`kom_ziemia`
+  jedzie zawsze, w trybie proceduralnym wypełniony `-1`) — klient i server.py
+  nie muszą się rozgałęziać przy parsowaniu, tylko przy interpretacji.
+- Granice państw biorą się z prawdziwych granic administracyjnych (test
+  punkt-w-poligonie), ziemie z prawdziwych ośrodków epoki (Thiessen wewnątrz
+  granicy państwa) — wszystko kotwiczone w lon/lat, nigdy w indeksach komórek
+  (zasada 5). Reszta mapy to jedna ziemia niczyja (zasada 9).
+- Kamera startowa (`kadr_startowy`, bbox państw scenariusza w px "płótna")
+  liczona jest w skrypcie scenariusza z geografii komórek (`punkty`), nie
+  z osobnego przeliczenia odwzorowania — unika rozjazdu, gdyby ktoś kiedyś
+  zmienił stałe Albersa w `generate_world.py`.
+- `scenariusz_800.json` (jak `world.npz`/`world_meta.json`) to artefakt
+  generatora — nie commitujemy, trzymać w `.gitignore`.
 
 ## Pomysły zaakceptowane kierunkowo (do dyskusji przed implementacją)
 
@@ -128,9 +162,12 @@ są w grafie sąsiedztwa sąsiadami. Potem wrócić do mechanik.
 ## Rytuały
 
 - Po każdej zmianie generatora: `python generate_world.py && python test_ciesnin.py`.
-- Nowe niezmienniki świata dopisywać do `test_ciesnin.py` (lub siostrzanych
-  plików testowych) — mapa, która nie przechodzi testów, nie wchodzi do gry.
+- Po każdej zmianie scenariusza: `python scenariusz_800.py && python test_scenariusz.py`
+  (wymaga świeżo wygenerowanego `world.npz`).
+- Nowe niezmienniki świata dopisywać do `test_ciesnin.py`, niezmienniki
+  scenariusza do `test_scenariusz.py` (lub siostrzanych plików testowych) —
+  mapa/scenariusz, który nie przechodzi testów, nie wchodzi do gry.
 - Nowe mechaniki najpierw jako czysta funkcja w `sim.py` + mini-test balansu,
   dopiero potem podpięcie do serwera i UI.
-- `world.npz` / `world_meta.json` nie commitujemy (artefakty generatora) —
-  trzymać w `.gitignore`.
+- `world.npz` / `world_meta.json` / `scenariusz_800.json` nie commitujemy
+  (artefakty generatora) — trzymać w `.gitignore`.
