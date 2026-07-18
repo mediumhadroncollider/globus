@@ -73,6 +73,12 @@ test_scenariusz.py → niezmienniki scenariusza       (uruchamiać po zmianie sc
   modelu danych.
 - Biblioteki JS vendorowane lokalnie w `static/` (żadnych CDN-ów). Błędy
   klienta mają krzyczeć z ekranu (panel diagnostyczny), nie ginąć w konsoli.
+- **Koszt klatki liczy się w wielokątach, nie w wywołaniach.** `Path2D`
+  obejmujący tysiące komórek (np. cała ziemia niczyja) nadaje się do
+  wypalenia RAZ na osobny canvas, nigdy do rysowania (`fill`/`stroke`) co
+  klatkę — nawet jeden taki `fill()` w pętli renderu (np. pod hoverem, który
+  stoi nad tą warstwą niemal zawsze) potrafi zdominować koszt klatki (patrz
+  brief 0003, część A).
 
 ## Scenariusze
 
@@ -91,6 +97,12 @@ test_scenariusz.py → niezmienniki scenariusza       (uruchamiać po zmianie sc
   punkt-w-poligonie), ziemie z prawdziwych ośrodków epoki (Thiessen wewnątrz
   granicy państwa) — wszystko kotwiczone w lon/lat, nigdy w indeksach komórek
   (zasada 5). Reszta mapy to jedna ziemia niczyja (zasada 9).
+- **Przypisanie komórek do bytu politycznego z poligonu ZAWSZE kończy się
+  czyszczeniem na grafie sąsiedztwa** (filtr większościowy + spójność z
+  ochroną wysp) — test punkt-w-poligonie na środkach komórek sam z siebie
+  produkuje eksklawy na postrzępionych wybrzeżach (patrz brief 0003,
+  część B; implementacja w `scenariusz_800.py`, próg odprysku
+  `PROG_ODPRYSKU`).
 - Kamera startowa (`kadr_startowy`, bbox państw scenariusza w px "płótna")
   liczona jest w skrypcie scenariusza z geografii komórek (`punkty`), nie
   z osobnego przeliczenia odwzorowania — unika rozjazdu, gdyby ktoś kiedyś

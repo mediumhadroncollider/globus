@@ -11,8 +11,14 @@ Wymaga wygenerowanego świata i scenariusza:
 
 import json
 import numpy as np
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import connected_components
 
 from sim import Swiat
+
+# Musi być zgodne z PROG_ODPRYSKU w scenariusz_800.py — składowa mniejsza
+# niż tyle komórek to "sól i pieprz", nie prawdziwa wyspa.
+PROG_ODPRYSKU = 4
 
 OK = True
 
@@ -59,8 +65,58 @@ sprawdz(
     bool((kom_panstwo[~lad] < 0).all()),
 )
 
+# 4. Komórki każdego państwa tworzą JEDNĄ spójną składową na grafie
+# sąsiedztwa (z pominięciem zerwanych cieśnin — wyspa oddzielona cieśniną nie
+# jest sąsiadem lądu), poza jawnie dopuszczonymi wyspami >= PROG_ODPRYSKU.
+# Odpryski mniejsze od progu oznaczałyby, że scenariusz_800.py nie posprzątał
+# eksklaw/dziur po teście punkt-w-poligonie (patrz brief 0003, część B).
+n = len(lad)
+indptr, indices = d["indptr"], d["indices"]
+zerwane_a, zerwane_b = d["zerwane_a"], d["zerwane_b"]
+_ii = np.repeat(np.arange(n), np.diff(indptr))
+_jj = indices
+_ok = lad[_ii] & lad[_jj]
+_ii, _jj = _ii[_ok], _jj[_ok]
+_zerw = set(zip(zerwane_a.tolist(), zerwane_b.tolist()))
+_zerw |= set(zip(zerwane_b.tolist(), zerwane_a.tolist()))
+_zywe = np.array([(a, b) not in _zerw for a, b in zip(_ii.tolist(), _jj.tolist())])
+_ii, _jj = _ii[_zywe], _jj[_zywe]
+
+spojne = True
+wyspy = []
+for pid, (klucz, panstwo) in enumerate(dane["panstwa"].items()):
+    idx = np.flatnonzero(kom_panstwo == pid)
+    if len(idx) == 0:
+        continue
+    maska_e = (kom_panstwo[_ii] == pid) & (kom_panstwo[_jj] == pid)
+    a, b = _ii[maska_e], _jj[maska_e]
+    lokalny = -np.ones(n, dtype=np.int64)
+    lokalny[idx] = np.arange(len(idx))
+    mat = csr_matrix(
+        (np.ones(len(a)), (lokalny[a], lokalny[b])),
+        shape=(len(idx), len(idx)),
+    )
+    n_skladowych, etykiety = connected_components(mat, directed=False)
+    rozmiary = np.bincount(etykiety, minlength=n_skladowych)
+    najwieksza = int(rozmiary.argmax())
+    for sk in range(n_skladowych):
+        if sk == najwieksza:
+            continue
+        rozmiar = int(rozmiary[sk])
+        if rozmiar >= PROG_ODPRYSKU:
+            wyspy.append((panstwo["nazwa_robocza"], rozmiar))
+        else:
+            spojne = False
+
+sprawdz(
+    f"komórki każdego państwa tworzą jedną spójną składową "
+    f"(poza wyspami >= {PROG_ODPRYSKU} komórek)",
+    spojne,
+)
+print("     wyspy:", wyspy if wyspy else "brak")
+
 # ----------------------------------------------------------------------------
-# 4-5: niezmienniki DYNAMICZNE — trzeba odpalić symulację.
+# 5-6: niezmienniki DYNAMICZNE — trzeba odpalić symulację.
 # ----------------------------------------------------------------------------
 s = Swiat()
 sprawdz("Swiat() wchodzi w tryb scenariusza", s.tryb_scenariusza)
@@ -70,7 +126,7 @@ pop_niczyje_start = float(s.populacja[s.lad & (s.wlasciciel_komorki < 0)].sum())
 for _ in range(100):
     wynik = s.tick()
 
-# 4. Po 100 tickach: skarbce Cantii i Sussexu > 0, populacja na ziemiach
+# 5. Po 100 tickach: skarbce Cantii i Sussexu > 0, populacja na ziemiach
 #    niczyich > 0 i zmieniła się względem startu.
 klucze = [p["klucz"] for p in s.panstwa]
 sprawdz(
@@ -88,7 +144,7 @@ sprawdz(
     pop_niczyje_koniec != pop_niczyje_start,
 )
 
-# 5. Podbój ziemi niczyjej to jawna odmowa (nie ginie po cichu jak None,
+# 6. Podbój ziemi niczyjej to jawna odmowa (nie ginie po cichu jak None,
 #    patrz zadanie 0002 — gracz musi wiedzieć, że kliknął źle).
 wynik_podboju = s.wykonaj_akcje({"typ": "podboj", "ziemia": -1, "panstwo": klucze.index("kent")})
 sprawdz(
