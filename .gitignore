@@ -1,0 +1,8 @@
+# Artefakty generatora świata i scenariuszy — odtwarzalne, nie commitujemy
+# (patrz CLAUDE.md, sekcje "Rytuały" i "Scenariusze").
+/world.npz
+/world_meta.json
+/scenariusz_800.json
+
+__pycache__/
+*.pyc

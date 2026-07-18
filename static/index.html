@@ -89,21 +89,50 @@ etap("Pobieram tablice świata…");
 const buf  = await (await fetch("/api/dane")).arrayBuffer();
 
 const N = meta.n_komorek;
+const TRYB_SCENARIUSZA = !!meta.tryb_scenariusza;
+const KOLOR_NICZYJE = "#5c6656";   // "jednolity szarozielony" (patrz brief 0001)
+
 // Nakładamy "widoki" na wspólny bufor bajtów — kolejność i typy MUSZĄ
 // odpowiadać temu, co skleja server.py (nasz mini-protokół binarny):
-const punkty  = new Float32Array(buf, 0,      N * 2);
-const komPow  = new Int32Array  (buf, N * 8,  N);
-const zyznosc = new Float32Array(buf, N * 12, N);
-const lad     = new Uint8Array  (buf, N * 16, N);
+//   punkty f32×N×2, kom_pow i32×N, kom_ziemia i32×N, zyznosc f32×N, lad u8×N
+const punkty    = new Float32Array(buf, 0,      N * 2);
+const komPow    = new Int32Array  (buf, N * 8,  N);
+const komZiemia = new Int32Array  (buf, N * 12, N);
+const zyznosc   = new Float32Array(buf, N * 16, N);
+const lad       = new Uint8Array  (buf, N * 20, N);
 
-// Zmienny stan przychodzący z serwera (aktualizowany na bieżąco):
-let powKrol  = Int32Array.from(meta.pow_krol);   // właściciel każdego powiatu
-let podatki  = Float64Array.from(meta.podatki);
-let powPop   = new Float64Array(meta.n_pow);     // wypełnią się po 1. ticku
-let powDoch  = new Float64Array(meta.n_pow);
-let skarbiec = new Float64Array(meta.n_krol);
-let krolDoch = new Float64Array(meta.n_krol);
-let nrTicka  = 0;
+/* ---------------------------------------------------------------------------
+   JEDNOSTKA POLITYCZNA I WŁAŚCICIEL — te same nazwy niezależnie od trybu.
+   Tryb scenariusza: jednostka = ZIEMIA, właściciel = PAŃSTWO.
+   Tryb proceduralny (bez scenariusz_800.json): jednostka = powiat,
+   właściciel = królestwo — dokładnie jak dawniej, nic się nie psuje.
+   komJednostka[komórka] == -1 istnieje TYLKO w trybie scenariusza
+   ("ziemia niczyja" — jedna szara masa, patrz CLAUDE.md).
+   --------------------------------------------------------------------------- */
+const komJednostka = TRYB_SCENARIUSZA ? komZiemia : komPow;
+const nJednostek = TRYB_SCENARIUSZA ? meta.ziemie.length : meta.n_pow;
+const nWlascicieli = TRYB_SCENARIUSZA ? meta.panstwa.length : meta.n_krol;
+
+// Zmienny stan przychodzący z serwera (aktualizowany na bieżąco). Nazwa
+// "wlasciciel" zastępuje dawne "powKrol" — ten sam kształt (per jednostka),
+// zmieniany JEDNĄ liczbą przy podboju. meta.ziemie[*].panstwo to już BIEŻĄCY
+// indeks właściciela (server.py go liczy z żywej tablicy ziemia_panstwo,
+// nie ze statycznego scenariusza) — gracz łączący się w trakcie gry widzi
+// prawdziwy stan, nie ten sprzed ewentualnych podbojów.
+let wlasciciel = TRYB_SCENARIUSZA
+  ? Int32Array.from(meta.ziemie.map(z => z.panstwo))
+  : Int32Array.from(meta.pow_krol);
+let podatki   = Float64Array.from(meta.podatki);
+let jednPop   = new Float64Array(nJednostek);   // wypełnią się po 1. ticku
+let jednDoch  = new Float64Array(nJednostek);
+let skarbiec  = new Float64Array(nWlascicieli);
+let wlDoch    = new Float64Array(nWlascicieli);
+let niczyjePop = 0;
+let nrTicka   = 0;
+
+function nazwaJednostkiGry(j)    { return TRYB_SCENARIUSZA ? meta.ziemie[j].nazwa_gry    : meta.nazwy_pow[j]; }
+function nazwaJednostkiRobocza(j){ return TRYB_SCENARIUSZA ? meta.ziemie[j].nazwa_robocza : null; }
+function nazwaWlascicielaGry(w)  { return TRYB_SCENARIUSZA ? meta.panstwa[w].nazwa_gry    : meta.nazwy_krol[w]; }
 
 /* ===========================================================================
    2. GEOMETRIA: odtworzenie diagramu Woronoja z samych punktów
@@ -113,26 +142,32 @@ etap("Odtwarzam diagram Woronoja z punktów…");
 const delaunay = new d3.Delaunay(punkty);
 const voronoi  = delaunay.voronoi([0, 0, W, H]);
 
-// Ścieżka każdego POWIATU = suma wielokątów jego komórek. Budujemy raz;
-// potem malowanie powiatu to jedno wywołanie fill(path) — to jest ten sam
-// "batching", który przy 150k komórkach uratował nam czas renderu.
-const sciezkaPow = Array.from({ length: meta.n_pow }, () => new Path2D());
+// Ścieżka każdej JEDNOSTKI = suma wielokątów jej komórek, plus jedna zbiorcza
+// dla ziemi niczyjej. Budujemy raz; potem malowanie to jedno wywołanie
+// fill(path) — ten sam "batching", który przy 150k komórkach uratował render.
+const sciezkaJednostki = Array.from({ length: nJednostek }, () => new Path2D());
+const sciezkaNiczyje = new Path2D();
 for (let c = 0; c < N; c++) {
-  if (lad[c]) voronoi.renderCell(c, sciezkaPow[komPow[c]]);
+  if (!lad[c]) continue;
+  const j = komJednostka[c];
+  if (j >= 0) voronoi.renderCell(c, sciezkaJednostki[j]);
+  else voronoi.renderCell(c, sciezkaNiczyje);
 }
 
 // Granice: krawędź Woronoja "wie", które dwie komórki rozdziela, więc od razu
-// wiemy, czy to wybrzeże, granica powiatu, czy państwa. Granice powiatów
-// i wybrzeże są stałe; granice KRÓLESTW zależą od własności, więc mają
-// funkcję przebudowy (wołaną po każdym podboju).
-const grPowiat = new Path2D(), grBrzeg = new Path2D();
-let grKrol = new Path2D();
+// wiemy, czy to wybrzeże, granica jednostki, czy właściciela. Granice
+// jednostek i wybrzeże są geometrycznie stałe; to, czy krawędź jest CIENKA
+// (wewnątrz tego samego właściciela) czy GRUBA (różni właściciele, w tym
+// właściciel kontra ziemia niczyja) zależy od własności — stąd funkcja
+// przebudowy, wołana po każdym podboju.
+const grBrzeg = new Path2D();
+let grJednostka = new Path2D(), grWlasciciel = new Path2D();
 // zerwane sąsiedztwa (cieśniny z korekt ręcznych) — zbiór do szybkiego testu
 const zerwane = new Set((meta.zerwane || []).map(([a, b]) =>
   a < b ? a * N + b : b * N + a));
 const { halfedges, triangles } = delaunay;
 const cc = voronoi.circumcenters;
-const krawedzie = [];   // [x1,y1,x2,y2, komórkaA, komórkaB] — do przebudów
+const krawedzieWewn = [];   // [x1,y1,x2,y2, jednostkaA, jednostkaB] — do przebudów
 for (let e = 0; e < halfedges.length; e++) {
   const opp = halfedges[e];
   if (opp < e) continue;                       // każda krawędź tylko raz
@@ -147,27 +182,28 @@ for (let e = 0; e < halfedges.length; e++) {
     // wizualnie jedno i drugie to woda, więc rysujemy tą samą kreską
     grBrzeg.moveTo(x1,y1); grBrzeg.lineTo(x2,y2);
   }
-  else if (lad[a] && komPow[a] !== komPow[b]) {
-    grPowiat.moveTo(x1,y1); grPowiat.lineTo(x2,y2);
-    krawedzie.push([x1,y1,x2,y2,a,b]);
+  else if (lad[a] && komJednostka[a] !== komJednostka[b]) {
+    krawedzieWewn.push([x1,y1,x2,y2,komJednostka[a],komJednostka[b]]);
   }
 }
-function przebudujGraniceKrolestw() {
-  grKrol = new Path2D();
-  for (const [x1,y1,x2,y2,a,b] of krawedzie) {
-    if (powKrol[komPow[a]] !== powKrol[komPow[b]]) {
-      grKrol.moveTo(x1,y1); grKrol.lineTo(x2,y2);
-    }
+function wlascicielJednostki(j) { return j >= 0 ? wlasciciel[j] : -1; }
+function przebudujGranice() {
+  grJednostka = new Path2D(); grWlasciciel = new Path2D();
+  for (const [x1,y1,x2,y2,ja,jb] of krawedzieWewn) {
+    const cel = (wlascicielJednostki(ja) !== wlascicielJednostki(jb)) ? grWlasciciel : grJednostka;
+    cel.moveTo(x1,y1); cel.lineTo(x2,y2);
   }
 }
-przebudujGraniceKrolestw();
+przebudujGranice();
 
 /* ===========================================================================
    3. KOLORY I WARSTWY RENDEROWANIA
    =========================================================================== */
-// paleta królestw: równe kroki po kole barw (działa dla dowolnego n_krol)
-const kolorKrol = Array.from({ length: meta.n_krol },
-  (_, k) => `hsl(${(k * 360 / meta.n_krol) | 0} 34% 58%)`);
+// paleta właścicieli: barwy z PANSTWA (scenariusz) albo równe kroki po kole
+// barw, jak dawniej (tryb proceduralny, działa dla dowolnego n_krol).
+const kolorWlasciciela = TRYB_SCENARIUSZA
+  ? meta.panstwa.map(p => p.kolor)
+  : Array.from({ length: nWlascicieli }, (_, k) => `hsl(${(k * 360 / nWlascicieli) | 0} 34% 58%)`);
 
 // mapa ciepła dla populacji/dochodu: granat -> złoto (prosty lerp dwóch barw)
 function cieplo(t) {
@@ -178,7 +214,7 @@ function cieplo(t) {
 
 // Warstwa "władcy" zmienia się rzadko (tylko podboje) — trzymamy ją wypaloną
 // na niewidocznym canvasie i tylko kopiujemy. Mapy ciepła malujemy na żywo,
-// bo to ledwie ~2 tys. ścieżek powiatów.
+// bo to ledwie kilka tysięcy ścieżek jednostek.
 const wladcyCv = document.createElement("canvas");
 wladcyCv.width = W * RS; wladcyCv.height = H * RS;
 function wypalWladcow() {
@@ -186,9 +222,12 @@ function wypalWladcow() {
   g.setTransform(RS, 0, 0, RS, 0, 0);
   g.fillStyle = "#26313c"; g.fillRect(0, 0, W, H);
   g.lineWidth = 1;
-  for (let p = 0; p < meta.n_pow; p++) {
-    g.fillStyle = g.strokeStyle = kolorKrol[powKrol[p]];
-    g.fill(sciezkaPow[p]); g.stroke(sciezkaPow[p]);  // stroke zszywa szwy
+  // ziemia niczyja: jedna szara masa pod spodem
+  g.fillStyle = g.strokeStyle = KOLOR_NICZYJE;
+  g.fill(sciezkaNiczyje); g.stroke(sciezkaNiczyje);
+  for (let j = 0; j < nJednostek; j++) {
+    g.fillStyle = g.strokeStyle = kolorWlasciciela[wlasciciel[j]];
+    g.fill(sciezkaJednostki[j]); g.stroke(sciezkaJednostki[j]);  // stroke zszywa szwy
   }
 }
 wypalWladcow();
@@ -198,11 +237,27 @@ wypalWladcow();
    =========================================================================== */
 const cv = document.getElementById("mapa");
 const scena = document.getElementById("scena");
-let kam = null, widok = "wladcy", hover = -1, przeciag = null;
+let kam = null, widok = "wladcy", hoverCel = -1, przeciag = null;
 
 function dopasujKamere() {
-  const s = Math.min(scena.clientWidth / W, scena.clientHeight / H);
-  kam = { s, tx: (scena.clientWidth - W*s)/2, ty: (scena.clientHeight - H*s)/2, fit: s };
+  // Scenariusz: kamera startuje na bboxie obu państw (kadr_startowy, liczony
+  // w scenariusz_800.py z geografii komórek) — gracz nie szuka Kentu na
+  // mapie całej Europy. Bez scenariusza: dopasowanie do całego płótna, jak
+  // dawniej.
+  if (TRYB_SCENARIUSZA && meta.kadr_startowy) {
+    const { x0, y0, x1, y1 } = meta.kadr_startowy;
+    const bw = x1 - x0, bh = y1 - y0;
+    const s = Math.min(scena.clientWidth / bw, scena.clientHeight / bh);
+    kam = {
+      s,
+      tx: (scena.clientWidth - bw * s) / 2 - x0 * s,
+      ty: (scena.clientHeight - bh * s) / 2 - y0 * s,
+      fit: s,
+    };
+  } else {
+    const s = Math.min(scena.clientWidth / W, scena.clientHeight / H);
+    kam = { s, tx: (scena.clientWidth - W*s)/2, ty: (scena.clientHeight - H*s)/2, fit: s };
+  }
 }
 function rysuj() {
   const dpr = window.devicePixelRatio || 1;
@@ -219,14 +274,16 @@ function rysuj() {
   } else {
     g.fillStyle = "#26313c";
     g.fillRect(0, 0, W, H);
-    const dane = widok === "pop" ? powPop : powDoch;
-    // normalizacja "per widok": 95. percentyl jako maks, żeby jeden bogaty
-    // powiat nie spłaszczał całej skali barw
+    g.fillStyle = g.strokeStyle = KOLOR_NICZYJE;
+    g.fill(sciezkaNiczyje); g.stroke(sciezkaNiczyje);
+    const dane = widok === "pop" ? jednPop : jednDoch;
+    // normalizacja "per widok": 95. percentyl jako maks, żeby jedna bogata
+    // jednostka nie spłaszczała całej skali barw
     const kopia = Array.from(dane).sort((a, b) => a - b);
     const max = kopia[(kopia.length * 0.95) | 0] || 1;
-    for (let p = 0; p < meta.n_pow; p++) {
-      g.fillStyle = g.strokeStyle = cieplo(dane[p] / max);
-      g.fill(sciezkaPow[p]); g.stroke(sciezkaPow[p]);
+    for (let j = 0; j < nJednostek; j++) {
+      g.fillStyle = g.strokeStyle = cieplo(dane[j] / max);
+      g.fill(sciezkaJednostki[j]); g.stroke(sciezkaJednostki[j]);
     }
   }
 
@@ -237,14 +294,15 @@ function rysuj() {
   // tak, jak zoom rośnie, więc na ekranie kreska ma zawsze tyle samo pikseli
   // (tak robią wszystkie mapy internetowe).
   g.lineJoin = g.lineCap = "round";
-  g.strokeStyle = "rgba(20,16,10,.4)"; g.lineWidth = 0.7 / kam.s; g.stroke(grPowiat);
-  g.strokeStyle = "#1d1912";           g.lineWidth = 2.6 / kam.s; g.stroke(grKrol);
+  g.strokeStyle = "rgba(20,16,10,.4)"; g.lineWidth = 0.7 / kam.s; g.stroke(grJednostka);
+  g.strokeStyle = "#1d1912";           g.lineWidth = 2.6 / kam.s; g.stroke(grWlasciciel);
   g.strokeStyle = "#171d24";           g.lineWidth = 1.9 / kam.s; g.stroke(grBrzeg);
 
-  // podświetlenie powiatu pod kursorem
-  if (hover >= 0) {
+  // podświetlenie jednostki (albo ziemi niczyjej) pod kursorem
+  if (hoverCel >= 0 && lad[hoverCel]) {
+    const j = komJednostka[hoverCel];
     g.fillStyle = "rgba(255,250,235,.22)";
-    g.fill(sciezkaPow[hover]);
+    g.fill(j >= 0 ? sciezkaJednostki[j] : sciezkaNiczyje);
   }
 }
 dopasujKamere(); rysuj();
@@ -268,9 +326,9 @@ cv.addEventListener("pointermove", ev => {
   let nowy = -1;
   if (x >= 0 && y >= 0 && x <= W && y <= H) {
     const c = delaunay.find(x, y);      // najbliższa komórka: superszybkie
-    if (lad[c]) nowy = komPow[c];
+    if (lad[c]) nowy = c;
   }
-  if (nowy !== hover) { hover = nowy; odswiezInfo(); rysuj(); }
+  if (nowy !== hoverCel) { hoverCel = nowy; odswiezInfo(); rysuj(); }
 });
 cv.addEventListener("pointerdown", ev => {
   przeciag = { x: ev.clientX, y: ev.clientY };
@@ -278,14 +336,19 @@ cv.addEventListener("pointerdown", ev => {
 });
 cv.addEventListener("pointerup", ev => {
   przeciag = null;
-  // Shift+klik = podbój powiatu dla wybranego królestwa.
+  // Shift+klik = podbój jednostki dla wybranego właściciela.
   // Zauważ: klient NICZEGO nie zmienia sam — wysyła rozkaz, a prawda
   // wraca z serwera (wiadomość "zmiana"). Jedno źródło prawdy = zero rozjazdów.
-  if (ev.shiftKey && hover >= 0) {
-    ws.send(JSON.stringify({ typ: "podboj", powiat: hover, krolestwo: mojeKrol() }));
+  if (ev.shiftKey && hoverCel >= 0) {
+    const j = komJednostka[hoverCel];
+    if (TRYB_SCENARIUSZA) {
+      ws.send(JSON.stringify({ typ: "podboj", ziemia: j, panstwo: mojWlasciciel() }));
+    } else {
+      ws.send(JSON.stringify({ typ: "podboj", powiat: j, krolestwo: mojWlasciciel() }));
+    }
   }
 });
-cv.addEventListener("pointerleave", () => { przeciag = null; hover = -1; odswiezInfo(); rysuj(); });
+cv.addEventListener("pointerleave", () => { przeciag = null; hoverCel = -1; odswiezInfo(); rysuj(); });
 cv.addEventListener("wheel", ev => {
   ev.preventDefault();
   const r = cv.getBoundingClientRect();
@@ -305,16 +368,21 @@ ws.onmessage = ev => {
   const m = JSON.parse(ev.data);
   if (m.co === "tick") {
     nrTicka = m.tick;
-    powPop = m.pow_pop; powDoch = m.pow_doch;
-    skarbiec = m.skarbiec; krolDoch = m.krol_doch; podatki = m.podatki;
+    jednPop = TRYB_SCENARIUSZA ? m.ziemia_pop : m.pow_pop;
+    jednDoch = TRYB_SCENARIUSZA ? m.ziemia_doch : m.pow_doch;
+    if (TRYB_SCENARIUSZA) niczyjePop = m.niczyje_pop;
+    skarbiec = m.skarbiec; podatki = m.podatki;
+    if (!TRYB_SCENARIUSZA) wlDoch = m.krol_doch;
     odswiezRanking(); odswiezInfo();
     if (widok !== "wladcy") rysuj();      // mapy ciepła żyją co tick
   } else if (m.co === "zmiana" && m.typ === "podboj") {
-    powKrol[m.powiat] = m.krolestwo;      // serwer potwierdził — aktualizujemy
-    wypalWladcow(); przebudujGraniceKrolestw(); rysuj();
+    const j = TRYB_SCENARIUSZA ? m.ziemia : m.powiat;
+    const w = TRYB_SCENARIUSZA ? m.panstwo : m.krolestwo;
+    wlasciciel[j] = w;                    // serwer potwierdził — aktualizujemy
+    wypalWladcow(); przebudujGranice(); rysuj();
   } else if (m.co === "zmiana" && m.typ === "podatek") {
-    podatki[m.krolestwo] = m.stawka;
-    if (m.krolestwo === mojeKrol()) synchronizujSuwak();
+    podatki[m.panstwo] = m.stawka;
+    if (m.panstwo === mojWlasciciel()) synchronizujSuwak();
   }
 };
 
@@ -327,52 +395,103 @@ const wybor = document.getElementById("wybor-krol");
 const suwak = document.getElementById("suwak");
 const suwakVal = document.getElementById("suwak-val");
 
-meta.nazwy_krol.forEach((n, k) => {
+// Wybór "grasz jako": w scenariuszu tylko Cantia i Australes Saxones (bo
+// meta.panstwa zawiera dokładnie te dwa państwa), w trybie proceduralnym —
+// jak dawniej, wszystkie losowe królestwa.
+for (let w = 0; w < nWlascicieli; w++) {
   const o = document.createElement("option");
-  o.value = k; o.textContent = n;
+  o.value = w; o.textContent = nazwaWlascicielaGry(w);
   wybor.appendChild(o);
-});
-const mojeKrol = () => +wybor.value;
+}
+wybor.value = TRYB_SCENARIUSZA ? meta.panstwo_gracz : 0;
+const mojWlasciciel = () => +wybor.value;
+
+// W scenariuszu suwak podatku ZAWSZE dotyczy państwa gracza (Cantii) —
+// niezależnie od tego, kogo pokazuje rozwijana lista (ta służy do wyboru
+// celu podboju shift+klikiem). W trybie proceduralnym suwak podąża za listą,
+// jak dawniej.
+function celPodatku() { return TRYB_SCENARIUSZA ? meta.panstwo_gracz : mojWlasciciel(); }
 
 function synchronizujSuwak() {
-  suwak.value = Math.round(podatki[mojeKrol()] * 100);
+  suwak.value = Math.round(podatki[celPodatku()] * 100);
   suwakVal.textContent = suwak.value + "%";
 }
-wybor.onchange = synchronizujSuwak;
+wybor.onchange = () => { if (!TRYB_SCENARIUSZA) synchronizujSuwak(); rysuj(); };
 suwak.oninput = () => {
   suwakVal.textContent = suwak.value + "%";
-  ws.send(JSON.stringify({ typ: "podatek", krolestwo: mojeKrol(),
-                           stawka: suwak.value / 100 }));
+  const cel = celPodatku();
+  ws.send(JSON.stringify({ typ: "podatek", panstwo: cel, krolestwo: cel, stawka: suwak.value / 100 }));
 };
 synchronizujSuwak();
 
 function odswiezInfo() {
-  if (hover < 0) {
-    info.innerHTML = `<span class="szary">Najedź na powiat. Kółko = zoom,
-      przeciągnij = przesuń.<br><b>Shift+klik</b> = podbój dla Twojego
-      królestwa.</span>`;
+  if (hoverCel < 0) {
+    info.innerHTML = `<span class="szary">Najedź na obszar. Kółko = zoom,
+      przeciągnij = przesuń.<br><b>Shift+klik</b> = podbój dla
+      wybranego państwa.</span>`;
     return;
   }
-  const k = powKrol[hover];
-  info.innerHTML =
-    `<span class="zloto" style="letter-spacing:.14em;text-transform:uppercase">
-       Królestwo ${meta.nazwy_krol[k]}</span><br>
-     <b style="font-size:15px">${meta.nazwy_pow[hover]}</b><br>
-     populacja: <b>${Math.round(powPop[hover]).toLocaleString("pl")}</b><br>
-     dochód/tick: <b>${(+powDoch[hover]).toFixed(1)}</b>`;
+  const j = komJednostka[hoverCel];
+  if (j < 0) {
+    // ziemia niczyja — brak podziału wewnętrznego, sama populacja tła
+    info.innerHTML =
+      `<span class="szary" style="letter-spacing:.14em;text-transform:uppercase">
+         ziemie niczyje</span><br>
+       populacja razem: <b>${Math.round(niczyjePop).toLocaleString("pl")}</b>`;
+    return;
+  }
+  const w = wlasciciel[j];
+  if (TRYB_SCENARIUSZA) {
+    const z = meta.ziemie[j];
+    const p = meta.panstwa[w];
+    const wladca = p.wladca && p.wladca.imie
+      ? `${p.wladca.imie}${p.wladca.tytul ? ", " + p.wladca.tytul : ""}` : "—";
+    info.innerHTML =
+      `<span class="zloto" style="letter-spacing:.14em;text-transform:uppercase">
+         ${p.nazwa_gry}</span><br>
+       <b style="font-size:15px">${z.nazwa_gry}</b>
+       <span class="szary">(${z.nazwa_robocza})</span><br>
+       władca: <b>${wladca}</b><br>
+       populacja: <b>${Math.round(jednPop[j] || 0).toLocaleString("pl")}</b><br>
+       dochód/tick: <b>${(+jednDoch[j] || 0).toFixed(1)}</b>`;
+  } else {
+    info.innerHTML =
+      `<span class="zloto" style="letter-spacing:.14em;text-transform:uppercase">
+         Królestwo ${meta.nazwy_krol[w]}</span><br>
+       <b style="font-size:15px">${nazwaJednostkiGry(j)}</b><br>
+       populacja: <b>${Math.round(jednPop[j] || 0).toLocaleString("pl")}</b><br>
+       dochód/tick: <b>${(+jednDoch[j] || 0).toFixed(1)}</b>`;
+  }
 }
 function odswiezRanking() {
-  const wiersze = meta.nazwy_krol.map((n, k) => ({ n, k, s: skarbiec[k] }))
+  const wiersze = Array.from({ length: nWlascicieli }, (_, w) => ({ w, s: skarbiec[w] }))
     .sort((a, b) => b.s - a.s)
-    .map(({ n, k, s }) =>
-      `<span style="color:${kolorKrol[k]}">■</span> ${n}
-       <span class="szary">pod. ${(podatki[k]*100)|0}%</span>
+    .map(({ w, s }) =>
+      `<span style="color:${kolorWlasciciela[w]}">■</span> ${nazwaWlascicielaGry(w)}
+       <span class="szary">pod. ${(podatki[w]*100)|0}%</span>
        <b style="float:right">${Math.round(s).toLocaleString("pl")}</b>`)
     .join("<br>");
   ranking.innerHTML =
     `<span class="szary">tick ${nrTicka} · skarbce</span><br>` + wiersze;
 }
 odswiezInfo();
+
+/* ===========================================================================
+   8. PRZEŁĄCZANIE WIDOKÓW (Władcy / Populacja / Dochód)
+   =========================================================================== */
+const przyciskiWidoku = {
+  wladcy: document.getElementById("w-wladcy"),
+  pop: document.getElementById("w-pop"),
+  doch: document.getElementById("w-doch"),
+};
+Object.entries(przyciskiWidoku).forEach(([nazwa, btn]) => {
+  btn.onclick = () => {
+    widok = nazwa;
+    Object.values(przyciskiWidoku).forEach(b => b.classList.remove("aktywny"));
+    btn.classList.add("aktywny");
+    rysuj();
+  };
+});
 
 } catch (err) {
   _info.innerHTML = "<b style='color:#e07050'>Błąd startu:</b> " + err.message;

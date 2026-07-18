@@ -45,8 +45,32 @@ def meta():
     """Małe dane opisowe — zwykły JSON."""
     m = json.load(open("world_meta.json"))
     m["komorka_pow"] = None  # duże tablice NIE idą JSON-em (patrz niżej)
+    m["kom_ziemia"] = None   # to samo — kom_ziemia jedzie w /api/dane, nie tutaj
     m["podatki"] = swiat.podatek.tolist()
-    m["pow_krol"] = swiat.pow_krol.tolist()
+    m["tryb_scenariusza"] = swiat.tryb_scenariusza
+
+    if swiat.tryb_scenariusza:
+        # Warstwa scenariusza: ZIEMIE i PAŃSTWA zamiast powiatów/królestw.
+        m["panstwa"] = swiat.panstwa
+        m["ziemie"] = [
+            {
+                "id": z["id"],
+                "nazwa_robocza": z["nazwa_robocza"],
+                "nazwa_gry": z["nazwa_gry"],
+                # UWAGA: indeks BIEŻĄCEGO właściciela (ziemia_panstwo — żywy,
+                # zmieniany podbojem), NIE statyczny klucz z JSON-u scenariusza
+                # (ten zawsze pokazywałby stan sprzed pierwszego podboju —
+                # klient łączący się później musi widzieć prawdę na TERAZ).
+                "panstwo": int(swiat.ziemia_panstwo[i]),
+            }
+            for i, z in enumerate(swiat.ziemie)
+        ]
+        m["panstwo_gracz"] = swiat.panstwo_gracz
+        m["kadr_startowy"] = swiat.kadr_startowy
+        m["pow_krol"] = None
+    else:
+        m["pow_krol"] = swiat.pow_krol.tolist()
+
     return m
 
 @app.get("/api/dane")
@@ -56,18 +80,23 @@ def dane():
     binarnie przeglądarka dostaje je 'gotowe do użycia': opakuje bufor
     w Float32Array/Int32Array bez żadnego kopiowania. Kolejność i typy
     muszą się zgadzać po obu stronach — to nasz mini-protokół:
-        punkty  float32 × N×2   (bajty 0 … 8N)
-        kom_pow int32   × N     (8N … 12N)
-        zyznosc float32 × N     (12N … 16N)
-        lad     uint8   × N     (16N … 17N)
+        punkty     float32 × N×2   (bajty 0    … 8N)
+        kom_pow    int32   × N     (8N   … 12N)
+        kom_ziemia int32   × N     (12N  … 16N)
+        zyznosc    float32 × N     (16N  … 20N)
+        lad        uint8   × N     (20N  … 21N)
     Uwaga-pułapka: tablica uint8 stoi CELOWO na końcu. Typy 4-bajtowe
     (Int32Array, Float32Array) można nałożyć na bufor tylko pod adresem
     podzielnym przez 4 — gdyby bajty lądu stały w środku, wszystko za nimi
     byłoby przesunięte o N bajtów i przeglądarka rzuciłaby błędem wyrównania.
+    kom_ziemia jest ZAWSZE w tym bloku (tryb proceduralny wysyła samo -1) —
+    protokół binarny jednakowy w obu trybach, żeby klient nie musiał się
+    rozgałęziać przy parsowaniu.
     """
     czesci = [
         swiat.punkty.astype("<f4").tobytes(),
         swiat.komorka_pow.astype("<i4").tobytes(),
+        swiat.kom_ziemia.astype("<i4").tobytes(),
         swiat.zyznosc.astype("<f4").tobytes(),
         swiat.lad.astype(np.uint8).tobytes(),
     ]
@@ -114,17 +143,23 @@ async def start_petli():
         while True:
             await asyncio.sleep(TICK_CO_ILE_SEKUND)
             wynik = swiat.tick()          # cała ekonomia kontynentu: ~1 ms
-            await rozglos({
+            # tablice per ziemia/powiat są małe (tysiące liczb) — JSON
+            # wystarczy; zaokrąglamy, żeby nie słać 17 cyfr po przecinku
+            wiadomosc = {
                 "co": "tick",
                 "tick": wynik["tick"],
-                # tablice per powiat są małe (tysiące liczb) — JSON wystarczy;
-                # zaokrąglamy, żeby nie słać 17 cyfr po przecinku
-                "pow_pop": np.round(wynik["pow_pop"], 1).tolist(),
-                "pow_doch": np.round(wynik["pow_doch"], 2).tolist(),
-                "krol_doch": np.round(wynik["krol_doch"], 1).tolist(),
                 "skarbiec": np.round(wynik["skarbiec"], 1).tolist(),
                 "podatki": np.round(swiat.podatek, 3).tolist(),
-            })
+            }
+            if swiat.tryb_scenariusza:
+                wiadomosc["ziemia_pop"] = np.round(wynik["ziemia_pop"], 1).tolist()
+                wiadomosc["ziemia_doch"] = np.round(wynik["ziemia_doch"], 2).tolist()
+                wiadomosc["niczyje_pop"] = round(wynik["niczyje_pop"], 1)
+            else:
+                wiadomosc["pow_pop"] = np.round(wynik["pow_pop"], 1).tolist()
+                wiadomosc["pow_doch"] = np.round(wynik["pow_doch"], 2).tolist()
+                wiadomosc["krol_doch"] = np.round(wynik["krol_doch"], 1).tolist()
+            await rozglos(wiadomosc)
     asyncio.create_task(petla())
 
 # ----------------------------------------------------------------------------
