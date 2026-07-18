@@ -23,6 +23,7 @@ dokładnie jak dawniej (tryb proceduralny) — patrz CLAUDE.md, sekcja
 import json
 import pathlib
 import numpy as np
+from scipy.spatial import cKDTree
 
 import korekty as korekty_mod
 
@@ -173,6 +174,22 @@ class Swiat:
         for idx, wpis in korekty_mod.rozstrzygnij_komorki(korekty, self.lonlat):
             if "lad" in wpis:
                 self.lad[idx] = bool(wpis["lad"])
+
+        # Komórka zamieniona z morza na ląd nie ma jeszcze POWIATU (world.npz
+        # przydzielił go tylko lądowi ze swojej własnej generacji) — zostaje
+        # z komorka_pow == -1. W TRYBIE PROCEDURALNYM tick() grupuje dochód
+        # przez np.bincount(self.komorka_pow[self.lad], ...), a -1 w indeksach
+        # wywala ValueError na pierwszym ticku. Naprawiamy dokładnie tak samo
+        # jak sieroty w generate_world.py: najbliższy lądowy sąsiad z
+        # istniejącym powiatem użycza swojego. Nieszkodliwe też w trybie
+        # scenariusza — komorka_pow tam się w ogóle nie liczy.
+        braki = np.flatnonzero(self.lad & (self.komorka_pow < 0))
+        if len(braki):
+            ma_powiat = np.flatnonzero(self.lad & (self.komorka_pow >= 0))
+            if len(ma_powiat):
+                drzewo = cKDTree(self.punkty[ma_powiat])
+                _, najblizszy = drzewo.query(self.punkty[braki])
+                self.komorka_pow[braki] = self.komorka_pow[ma_powiat[najblizszy]]
 
     def _zastosuj_korekty_krawedzie(self, korekty):
         """Krok 3: korekty krawędzi typu "ciesnina" dopisują pary do zerwanych

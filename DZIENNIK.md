@@ -205,3 +205,34 @@ zmienia). Rozwiązanie: narzędzie "Przynależność" zawsze ustawia oba pola
 naraz (i czyści oba naraz przy Alt+klik) — format `korekty.json` i tak
 dopuszcza samo `panstwo` bez `ziemia` (dla ręcznej edycji pliku), ale edytor
 graficzny tej niespójności po prostu nie produkuje.
+
+### Poprawki po review (chatgpt-codex-connector, PR #4)
+
+Dwa zgłoszenia, oba potwierdzone odtworzeniem błędu, oba naprawione:
+
+1. **Crash w trybie proceduralnym.** Korekta `lad` zamieniająca morze na ląd
+   zostawiała nowej komórce `komorka_pow == -1` (world.npz przydziela powiat
+   tylko lądowi ze swojej generacji). W trybie proceduralnym `tick()` liczy
+   `np.bincount(self.komorka_pow[self.lad], ...)` — `-1` w indeksach wywala
+   `ValueError` na pierwszym ticku po takiej korekcie. Odtworzone bezpośrednio
+   przed poprawką. Naprawa w `sim.py` (`_zastosuj_korekty_lad`): dokładnie ten
+   sam trik co sieroty w `generate_world.py` — najbliższy lądowy sąsiad z
+   już przydzielonym powiatem (`cKDTree` po `punkty`) użycza swojego.
+   Nieszkodliwe w trybie scenariusza (komorka_pow tam się w ogóle nie liczy).
+2. **Niespójność testu z briefem.** `scenariusz_800.py` celowo chroni
+   przypiętą małą wyspę (< `PROG_ODPRYSKU`) przed usunięciem — ale
+   `test_scenariusz.py` kryterium 4 liczyło spójność OD NOWA z samego
+   `scenariusz_800.json`, nic nie wiedząc o przypięciu, więc poprawnie
+   zachowana wysepka (dokładnie przypadek Sheppey, po który sięga cały
+   brief) wyglądałaby jak regresja. Naprawa: kryterium 4 wczytuje teraz
+   `korekty.json` i wyklucza przypięte komórki z testu spójności — DOKŁADNIE
+   tą samą regułą co `scenariusz_800.py` (`_wyczysc_spojnosc`), wydzieloną do
+   wspólnej funkcji `spojnosc_panstw`, żeby te dwa miejsca nie mogły się już
+   rozjechać po cichu.
+
+Do obu poprawek dopisano syntetyczne testy regresyjne w `test_scenariusz.py`
+(kryteria 7b/7c) — nie zależą od tego, czy przy AKTUALNYM ziarnie świata
+akurat istnieje naturalny mały odprysk do przypięcia (sprawdziłem: przy
+bieżącym ziarnie żaden się nie trafia), więc łapią regresję niezależnie od
+przyszłych zmian generatora. Wszystkie niezmienniki (`test_ciesnin.py`,
+1–7 `test_scenariusz.py`) przechodzą.
