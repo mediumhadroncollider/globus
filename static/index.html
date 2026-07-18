@@ -16,18 +16,25 @@
   /* Wygląd interfejsu — zwykły CSS, nic magicznego */
   * { box-sizing: border-box; }
   body { margin: 0; background: #10151b; color: #e8e2d2;
-         font-family: Georgia, serif; overflow: hidden; }
+         font-family: Georgia, serif; overflow: hidden;
+         display: flex; flex-direction: column; height: 100vh; }
   #pasek { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
            padding: 10px 16px; border-bottom: 1px solid #2a2f36; }
+  #pasek-edytor { display: none; align-items: center; gap: 10px; flex-wrap: wrap;
+                  padding: 8px 16px; border-bottom: 1px solid #2a2f36; background: #171d24; }
   #tytul { font-size: 17px; letter-spacing: .22em; text-transform: uppercase; }
   #tytul span { color: #8a8272; font-size: 12px; letter-spacing: .08em; }
   button, select { padding: 6px 12px; font-size: 12px; letter-spacing: .06em;
     cursor: pointer; background: transparent; color: #d8d2c2;
     border: 1px solid #4a4438; border-radius: 3px; font-family: inherit;
     text-transform: uppercase; }
+  button:disabled { opacity: .35; cursor: default; }
   button.aktywny { background: #c9a227; color: #171512; border-color: #c9a227; }
   select { text-transform: none; background: #171d24; }
-  #scena { position: relative; width: 100vw; height: calc(100vh - 53px); }
+  /* Scena zajmuje CAŁĄ resztę wysokości (flex:1), niezależnie od tego, czy nad
+     nią jest jeden pasek (gra) czy dwa (edytor) — bez tego drugi pasek by
+     ukradł miejsce spod mapy, zamiast się nad nią doliczyć. */
+  #scena { position: relative; width: 100vw; flex: 1 1 auto; min-height: 0; }
   canvas { position: absolute; inset: 0; touch-action: none; }
   .panel { position: absolute; background: rgba(16,20,26,.9);
            border: 1px solid #3a3f47; border-radius: 4px; padding: 10px 14px;
@@ -39,6 +46,7 @@
   input[type=range] { width: 130px; accent-color: #c9a227; }
   .zloto { color: #c9a227; }
   .szary { color: #8a8272; }
+  hr.roz { border: none; border-top: 1px solid #3a3f47; margin: 6px 0; }
 </style>
 </head>
 <body>
@@ -56,6 +64,28 @@
     podatek <input type="range" id="suwak" min="0" max="50" value="10">
     <b id="suwak-val" class="zloto">10%</b>
   </div>
+</div>
+
+<!-- Pasek edytora świata (zadanie 0004) — istnieje w DOM zawsze, ale jest
+     ukryty (display:none), dopóki JS nie wykryje ?edytor=1 w adresie. Dzięki
+     temu zwykła rozgrywka wygląda i działa dokładnie tak jak dawniej. -->
+<div id="pasek-edytor">
+  <span class="szary">EDYTOR ŚWIATA:</span>
+  <button id="e-lad" class="aktywny" title="Klik przełącza komórkę ląd/woda; przeciągnij, żeby malować">Ląd / woda</button>
+  <button id="e-przynaleznosc" title="Klik przypisuje komórkę wybranemu państwu/ziemi; Alt+klik = do niczyich">Przynależność</button>
+  <button id="e-ciesnina" title="Klik blisko granicy dwóch komórek zrywa/przywraca sąsiedztwo">Cieśnina</button>
+  <button id="e-rzeka" title="Jak cieśnina, ale to na razie tylko znacznik i rysunek">Rzeka</button>
+  <button id="e-gumka" title="Usuwa korektę wskazanej komórki albo krawędzi">Gumka</button>
+  <span class="szary">|</span>
+  <span class="szary">pędzel [ / ]:</span> <b id="e-pedzel" class="zloto">1</b>
+  <span class="szary">|</span>
+  <select id="e-panstwo" title="Państwo docelowe (narzędzie Przynależność)"></select>
+  <select id="e-ziemia" title="Ziemia docelowa (narzędzie Przynależność)"></select>
+  <span class="szary">|</span>
+  <button id="e-wybrzeze" class="aktywny" title="Prawdziwa linia brzegowa Natural Earth (złota kreska przerywana)">Wybrzeże NE</button>
+  <span class="szary">|</span>
+  <span class="szary">niezapisane:</span> <b id="e-licznik" class="zloto">0</b>
+  <button id="e-zapisz">Zapisz</button>
 </div>
 
 <div id="scena">
@@ -77,9 +107,16 @@ window.addEventListener("error", e => {
 });
 try {
 
+// Tryb edytora świata (zadanie 0004): włączany WYŁĄCZNIE parametrem URL
+// ?edytor=1, żeby nie zaśmiecać zwykłej rozgrywki. Sprawdzamy to na samym
+// początku — cała reszta skryptu odwołuje się do tej jednej stałej.
+const EDYTOR = new URLSearchParams(location.search).get("edytor") === "1";
+
 /* ===========================================================================
    1. POBRANIE ŚWIATA
    Dwa zapytania: małe dane JSON-em, wielkie tablice jako czyste bajty.
+   W trybie edytora dochodzi trzecie: lista korekt (do podświetlenia tego,
+   co już poprawiono, i do dokładnego działania "gumki" — patrz sekcja 4b).
    =========================================================================== */
 if (typeof d3 === "undefined") {
   throw new Error("nie wczytał się /static/d3-delaunay.min.js (sprawdź, czy plik jest w katalogu static/)");
@@ -88,6 +125,11 @@ etap("Pobieram opis świata…");
 const meta = await (await fetch("/api/meta")).json();
 etap("Pobieram tablice świata…");
 const buf  = await (await fetch("/api/dane")).arrayBuffer();
+let korektyStart = null;
+if (EDYTOR) {
+  etap("Pobieram korekty edytora…");
+  korektyStart = await (await fetch("/api/korekty")).json();
+}
 
 const N = meta.n_komorek;
 const TRYB_SCENARIUSZA = !!meta.tryb_scenariusza;
@@ -95,12 +137,22 @@ const KOLOR_NICZYJE = "#5c6656";   // "jednolity szarozielony" (patrz brief 0001
 
 // Nakładamy "widoki" na wspólny bufor bajtów — kolejność i typy MUSZĄ
 // odpowiadać temu, co skleja server.py (nasz mini-protokół binarny):
-//   punkty f32×N×2, kom_pow i32×N, kom_ziemia i32×N, zyznosc f32×N, lad u8×N
-const punkty    = new Float32Array(buf, 0,      N * 2);
-const komPow    = new Int32Array  (buf, N * 8,  N);
-const komZiemia = new Int32Array  (buf, N * 12, N);
-const zyznosc   = new Float32Array(buf, N * 16, N);
-const lad       = new Uint8Array  (buf, N * 20, N);
+//   punkty f32×N×2, lonlat f32×N×2, kom_pow i32×N, kom_ziemia i32×N,
+//   zyznosc f32×N, lad u8×N. Przesunięcia liczone z rozmiarów poprzednich
+//   bloków (a nie na sztywno wpisanymi liczbami) — dopisanie nowego bloku
+//   (np. lonlat dla edytora) nie wymaga przeliczania reszty w głowie.
+const OFF_PUNKTY = 0;
+const OFF_LONLAT = OFF_PUNKTY + N * 4 * 2;
+const OFF_KOMPOW = OFF_LONLAT + N * 4 * 2;
+const OFF_KOMZIEMIA = OFF_KOMPOW + N * 4;
+const OFF_ZYZNOSC = OFF_KOMZIEMIA + N * 4;
+const OFF_LAD = OFF_ZYZNOSC + N * 4;
+const punkty    = new Float32Array(buf, OFF_PUNKTY,    N * 2);
+const lonlat    = new Float32Array(buf, OFF_LONLAT,    N * 2);   // tożsamość geograficzna (edytor)
+const komPow    = new Int32Array  (buf, OFF_KOMPOW,    N);
+const komZiemia = new Int32Array  (buf, OFF_KOMZIEMIA, N);
+const zyznosc   = new Float32Array(buf, OFF_ZYZNOSC,   N);
+const lad       = new Uint8Array  (buf, OFF_LAD,       N);
 
 /* ---------------------------------------------------------------------------
    JEDNOSTKA POLITYCZNA I WŁAŚCICIEL — te same nazwy niezależnie od trybu.
@@ -118,7 +170,7 @@ const nWlascicieli = TRYB_SCENARIUSZA ? meta.panstwa.length : meta.n_krol;
 // "wlasciciel" zastępuje dawne "powKrol" — ten sam kształt (per jednostka),
 // zmieniany JEDNĄ liczbą przy podboju. meta.ziemie[*].panstwo to już BIEŻĄCY
 // indeks właściciela (server.py go liczy z żywej tablicy ziemia_panstwo,
-// nie ze statycznego scenariusza) — gracz łączący się w trakcie gry widzi
+// nie ze statycznego scenariusza) — gracz łączący się później widzi
 // prawdziwy stan, nie ten sprzed ewentualnych podbojów.
 let wlasciciel = TRYB_SCENARIUSZA
   ? Int32Array.from(meta.ziemie.map(z => z.panstwo))
@@ -143,51 +195,65 @@ etap("Odtwarzam diagram Woronoja z punktów…");
 const delaunay = new d3.Delaunay(punkty);
 const voronoi  = delaunay.voronoi([0, 0, W, H]);
 
-// Ścieżka każdej JEDNOSTKI = suma wielokątów jej komórek, plus jedna zbiorcza
-// dla ziemi niczyjej. Budujemy raz; potem malowanie to jedno wywołanie
-// fill(path) — ten sam "batching", który przy 150k komórkach uratował render.
-const sciezkaJednostki = Array.from({ length: nJednostek }, () => new Path2D());
-const sciezkaNiczyje = new Path2D();
-for (let c = 0; c < N; c++) {
-  if (!lad[c]) continue;
-  const j = komJednostka[c];
-  if (j >= 0) voronoi.renderCell(c, sciezkaJednostki[j]);
-  else voronoi.renderCell(c, sciezkaNiczyje);
-}
+function kluczPary(a, b) { return a < b ? a * N + b : b * N + a; }   // klucz nieuporządkowanej pary komórek
 
-// Granice: krawędź Woronoja "wie", które dwie komórki rozdziela, więc od razu
-// wiemy, czy to wybrzeże, granica jednostki, czy właściciela. Granice
-// jednostek i wybrzeże są geometrycznie stałe; to, czy krawędź jest CIENKA
-// (wewnątrz tego samego właściciela) czy GRUBA (różni właściciele, w tym
-// właściciel kontra ziemia niczyja) zależy od własności — stąd funkcja
-// przebudowy, wołana po każdym podboju.
-const grBrzeg = new Path2D();
-let grJednostka = new Path2D(), grWlasciciel = new Path2D();
-// zerwane sąsiedztwa (cieśniny z korekt ręcznych) — zbiór do szybkiego testu
-const zerwane = new Set((meta.zerwane || []).map(([a, b]) =>
-  a < b ? a * N + b : b * N + a));
-const { halfedges, triangles } = delaunay;
-const cc = voronoi.circumcenters;
-const krawedzieWewn = [];   // [x1,y1,x2,y2, jednostkaA, jednostkaB] — do przebudów
-for (let e = 0; e < halfedges.length; e++) {
-  const opp = halfedges[e];
-  if (opp < e) continue;                       // każda krawędź tylko raz
-  const a = triangles[e];
-  const b = triangles[e % 3 === 2 ? e - 2 : e + 1];
-  const ta = (e / 3) | 0, tb = (opp / 3) | 0;
-  const x1 = cc[2*ta], y1 = cc[2*ta+1], x2 = cc[2*tb], y2 = cc[2*tb+1];
-  // klucz pary komórek: a*N+b mieści się bez strat w liczbie JS (N^2 < 2^53)
-  const paraKlucz = (a < b ? a * N + b : b * N + a);
-  if (lad[a] !== lad[b] || zerwane.has(paraKlucz)) {
-    // prawdziwe wybrzeże ALBO cieśnina zerwana ręcznie w generatorze —
-    // wizualnie jedno i drugie to woda, więc rysujemy tą samą kreską
-    grBrzeg.moveTo(x1,y1); grBrzeg.lineTo(x2,y2);
+// Zerwane sąsiedztwa (cieśniny — proceduralne z generate_world.py ORAZ ręczne
+// z edytora, server.py już je scaliło w /api/meta) — zbiór do szybkiego testu.
+// Edytor może w TEJ SESJI dopisać/wyjąć z niego pary (narzędzie "Cieśnina"),
+// dlatego to zwykły mutowalny Set, nie stała lista.
+const zerwaneSet = new Set((meta.zerwane || []).map(([a, b]) => kluczPary(a, b)));
+// Pary oznaczone jako "rzeka" (edytor) — czysto rysunkowe, NIE wchodzą do zerwaneSet.
+const rzekiPary = new Set();
+
+// Ścieżki i granice są PRZEBUDOWYWANE (nie tylko budowane raz), bo edytor
+// świata może w trakcie sesji zmienić ląd/przynależność komórki — wtedy
+// diagram trzeba przeliczyć, żeby podgląd na żywo się zgadzał (brief 0004:
+// "klient przelicza lad/przypisania i przebudowuje ścieżki").
+let sciezkaJednostki, sciezkaNiczyje, grBrzeg, sciezkaRzek, krawedzieWewn;
+let krawEdgeMap;   // TYLKO w edytorze: para komórek -> odcinek [x1,y1,x2,y2], do testu trafienia myszą
+function przebudujGeometrie() {
+  sciezkaJednostki = Array.from({ length: nJednostek }, () => new Path2D());
+  sciezkaNiczyje = new Path2D();
+  for (let c = 0; c < N; c++) {
+    if (!lad[c]) continue;
+    const j = komJednostka[c];
+    if (j >= 0) voronoi.renderCell(c, sciezkaJednostki[j]);
+    else voronoi.renderCell(c, sciezkaNiczyje);
   }
-  else if (lad[a] && komJednostka[a] !== komJednostka[b]) {
-    krawedzieWewn.push([x1,y1,x2,y2,komJednostka[a],komJednostka[b]]);
+
+  // Granice: krawędź Woronoja "wie", które dwie komórki rozdziela, więc od razu
+  // wiemy, czy to wybrzeże, granica jednostki, czy właściciela.
+  grBrzeg = new Path2D();
+  sciezkaRzek = new Path2D();
+  krawedzieWewn = [];
+  if (EDYTOR) krawEdgeMap = new Map();
+  const { halfedges, triangles } = delaunay;
+  const cc = voronoi.circumcenters;
+  for (let e = 0; e < halfedges.length; e++) {
+    const opp = halfedges[e];
+    if (opp < e) continue;                       // każda krawędź tylko raz
+    const a = triangles[e];
+    const b = triangles[e % 3 === 2 ? e - 2 : e + 1];
+    const ta = (e / 3) | 0, tb = (opp / 3) | 0;
+    const x1 = cc[2*ta], y1 = cc[2*ta+1], x2 = cc[2*tb], y2 = cc[2*tb+1];
+    const paraKlucz = kluczPary(a, b);
+    if (EDYTOR) krawEdgeMap.set(paraKlucz, [x1, y1, x2, y2]);
+    if (rzekiPary.has(paraKlucz)) {
+      sciezkaRzek.moveTo(x1, y1); sciezkaRzek.lineTo(x2, y2);
+    }
+    if (lad[a] !== lad[b] || zerwaneSet.has(paraKlucz)) {
+      // prawdziwe wybrzeże ALBO cieśnina zerwana (proceduralnie albo ręcznie)
+      grBrzeg.moveTo(x1,y1); grBrzeg.lineTo(x2,y2);
+    }
+    else if (lad[a] && komJednostka[a] !== komJednostka[b]) {
+      krawedzieWewn.push([x1,y1,x2,y2,komJednostka[a],komJednostka[b]]);
+    }
   }
 }
+przebudujGeometrie();
+
 function wlascicielJednostki(j) { return j >= 0 ? wlasciciel[j] : -1; }
+let grJednostka, grWlasciciel;
 function przebudujGranice() {
   grJednostka = new Path2D(); grWlasciciel = new Path2D();
   for (const [x1,y1,x2,y2,ja,jb] of krawedzieWewn) {
@@ -213,7 +279,7 @@ function cieplo(t) {
   return `rgb(${r|0},${g|0},${b|0})`;
 }
 
-// Warstwa "władcy" zmienia się rzadko (tylko podboje) — trzymamy ją wypaloną
+// Warstwa "władcy" zmienia się rzadko (podboje, edycje) — trzymamy ją wypaloną
 // na niewidocznym canvasie i tylko kopiujemy. Mapy ciepła malujemy na żywo,
 // bo to ledwie kilka tysięcy ścieżek jednostek.
 const wladcyCv = document.createElement("canvas");
@@ -233,18 +299,386 @@ function wypalWladcow() {
 }
 wypalWladcow();
 
-// Ziemia niczyja jest CAŁKOWICIE NIEZMIENNA (żadna akcja jej nie rusza) —
-// wypalamy ją raz na osobny canvas, tak jak władców, zamiast fill+stroke
-// ~23 600 wielokątów w KAŻDEJ klatce map ciepła (odświeżają się co tick).
+// Ziemia niczyja: wypalona na osobny canvas (patrz DZIENNIK.md, brief 0003) —
+// mapy ciepła kopiują gotowy obrazek zamiast fill+stroke tych samych
+// wielokątów co tick. W edytorze ta warstwa TEŻ bywa przebudowywana
+// (komórka może zmienić ląd/właściciela), stąd nazwana funkcja, nie IIFE.
 const niczyjeCv = document.createElement("canvas");
 niczyjeCv.width = W * RS; niczyjeCv.height = H * RS;
-(function wypalNiczyje() {
+function wypalNiczyje() {
   const g = niczyjeCv.getContext("2d");
   g.setTransform(RS, 0, 0, RS, 0, 0);
+  g.clearRect(0, 0, W, H);
   g.fillStyle = g.strokeStyle = KOLOR_NICZYJE;
   g.lineWidth = 1;
   g.fill(sciezkaNiczyje); g.stroke(sciezkaNiczyje);
-})();
+}
+wypalNiczyje();
+
+/* ===========================================================================
+   3b. EDYTOR ŚWIATA (zadanie 0004)
+   Zasada nadrzędna z briefu: EDYTOR NIE EDYTUJE ŚWIATA — edytuje listę
+   korekt. Wszystko poniżej zmienia WYŁĄCZNIE żywe tablice klienta (do
+   podglądu) i lokalne mapy korektyKomorek/korektyKrawedzi (do zapisu);
+   world.npz i scenariusz_800.json nie są tu w ogóle dotykane.
+   =========================================================================== */
+const idZiemi = new Map(TRYB_SCENARIUSZA ? meta.ziemie.map((z, i) => [z.nazwa_robocza, i]) : []);
+function idPanstwaZKlucza(klucz) { return meta.panstwa.findIndex(p => p.klucz === klucz); }
+
+// Aktualny efektywny właściciel/ziemia komórki, WPROST z żywych tablic —
+// dzięki temu, że korekty od razu mutują komZiemia, nie trzeba trzymać
+// osobnej tablicy "właściciel per komórka": ziemia i tak jednoznacznie
+// wyznacza państwo (wlasciciel[ziemia]).
+function panstwoKluczKomorki(idx) {
+  if (!TRYB_SCENARIUSZA) return null;
+  const j = komZiemia[idx];
+  return j >= 0 ? meta.panstwa[wlasciciel[j]].klucz : null;
+}
+function ziemiaNazwaKomorki(idx) {
+  if (!TRYB_SCENARIUSZA) return null;
+  const j = komZiemia[idx];
+  return j >= 0 ? meta.ziemie[j].nazwa_robocza : null;
+}
+
+// korektyKomorek: idx -> {lad?, panstwo?, ziemia?, notatka?} — TO dokładnie
+// trafia do zapisu (plus lonlat dopisywany dopiero przy budowaniu JSON-u).
+const korektyKomorek = new Map();
+// korektyKrawedzi: kluczPary(a,b) -> {a:[lon,lat], b:[lon,lat], typ, notatka?}
+const korektyKrawedzi = new Map();
+// bazowyStan: idx -> {lad, panstwo, ziemia} — stan SPRZED KOREKT (używa go
+// "gumka" do dokładnego cofnięcia). Dla komórek już poprawionych w
+// poprzednich sesjach seedujemy z serwera (patrz server.py, pole "_bazowe");
+// dla komórek dziewiczych w tej sesji dopisuje się LENIWIE, przy pierwszym
+// dotknięciu — w obu przypadkach to naprawdę stan "przed jakąkolwiek korektą".
+const bazowyStan = new Map();
+
+function polaWpisu(w) {
+  const { lonlat: _l, a: _a, b: _b, ...pola } = w;
+  return pola;
+}
+
+if (EDYTOR && korektyStart) {
+  const wpisyKom = korektyStart.komorki || [];
+  const bazoweKom = korektyStart._bazowe || [];
+  wpisyKom.forEach((wpis, i) => {
+    const b = bazoweKom[i];
+    if (!b) return;
+    korektyKomorek.set(b.idx, polaWpisu(wpis));
+    bazowyStan.set(b.idx, { lad: b.lad, panstwo: b.panstwo, ziemia: b.ziemia });
+  });
+  const wpisyKraw = korektyStart.krawedzie || [];
+  const idxKraw = korektyStart._krawedzie_idx || [];
+  wpisyKraw.forEach((wpis, i) => {
+    const para = idxKraw[i];
+    if (!para) return;
+    const [ia, ib] = para;
+    const klucz = kluczPary(ia, ib);
+    korektyKrawedzi.set(klucz, wpis);
+    if (wpis.typ === "ciesnina") zerwaneSet.add(klucz);
+    else if (wpis.typ === "rzeka") rzekiPary.add(klucz);
+  });
+  przebudujGeometrie();   // rzeki z poprzedniej sesji trzeba domalować
+}
+
+function pobierzBazowy(idx) {
+  if (!bazowyStan.has(idx)) {
+    bazowyStan.set(idx, {
+      lad: !!lad[idx],
+      panstwo: panstwoKluczKomorki(idx),
+      ziemia: ziemiaNazwaKomorki(idx),
+    });
+  }
+  return bazowyStan.get(idx);
+}
+
+// Nakłada wpis (albo null = "brak korekty") na ŻYWE tablice — brakujące pola
+// wpisu dociąga z bazowyStan. Ta sama funkcja obsługuje i zwykłą edycję,
+// i cofnięcie (undo), i "gumkę" — różni je tylko to, CO jej podajemy.
+function zastosujDoZywegoStanu(idx, wpis) {
+  const bazowy = pobierzBazowy(idx);
+  const efLad    = wpis && ("lad" in wpis)     ? wpis.lad     : bazowy.lad;
+  const efZiemia = wpis && ("ziemia" in wpis)  ? wpis.ziemia  : bazowy.ziemia;
+  lad[idx] = efLad ? 1 : 0;
+  if (TRYB_SCENARIUSZA) {
+    komZiemia[idx] = (efZiemia != null && idZiemi.has(efZiemia)) ? idZiemi.get(efZiemia) : -1;
+  }
+}
+
+function stanKorekty(idx) { return korektyKomorek.get(idx) || null; }
+function ustawKorekte(idx, czesciowaZmiana) {
+  const nowy = { ...(korektyKomorek.get(idx) || {}), ...czesciowaZmiana };
+  korektyKomorek.set(idx, nowy);
+  return nowy;
+}
+
+// --- pociągnięcie/klik jako JEDNA operacja cofalna (Ctrl+Z cofa całość) ----
+let narzedzie = "lad";
+let promienPedzla = 1;
+let celPedzlaLad = true;
+let edytorAktywny = false;
+let aktualnaOperacja = null;
+let dotknieteWTymPociagnieciu = new Set();
+const stosCofania = [];
+let zmianyNiezapisane = 0;
+
+function odswiezLicznikZmian() {
+  const el = document.getElementById("e-licznik");
+  if (el) el.textContent = zmianyNiezapisane;
+}
+function odswiezPedzel() {
+  const el = document.getElementById("e-pedzel");
+  if (el) el.textContent = promienPedzla;
+}
+
+function rozpocznijOperacje() {
+  aktualnaOperacja = { zmiany: [] };
+  dotknieteWTymPociagnieciu = new Set();
+}
+function zakonczOperacje() {
+  if (aktualnaOperacja && aktualnaOperacja.zmiany.length) {
+    stosCofania.push(aktualnaOperacja);
+    zmianyNiezapisane++;
+    odswiezLicznikZmian();
+  }
+  aktualnaOperacja = null;
+  zaplanujPrzebudowe();
+}
+function cofnijOperacje() {
+  const op = stosCofania.pop();
+  if (!op) return;
+  for (let i = op.zmiany.length - 1; i >= 0; i--) {
+    const z = op.zmiany[i];
+    if (z.rodzaj === "krawedz") {
+      if (z.przed) korektyKrawedzi.set(z.klucz, z.przed); else korektyKrawedzi.delete(z.klucz);
+      zerwaneSet.delete(z.klucz); rzekiPary.delete(z.klucz);
+      if (z.przed && z.przed.typ === "ciesnina") zerwaneSet.add(z.klucz);
+      if (z.przed && z.przed.typ === "rzeka") rzekiPary.add(z.klucz);
+    } else {
+      if (z.przed) korektyKomorek.set(z.idx, z.przed); else korektyKomorek.delete(z.idx);
+      zastosujDoZywegoStanu(z.idx, z.przed);
+    }
+  }
+  zmianyNiezapisane = Math.max(0, zmianyNiezapisane - 1);
+  odswiezLicznikZmian();
+  zaplanujPrzebudowe();
+}
+
+function komorkiPedzla(c) {
+  if (promienPedzla <= 1) return [c];
+  return [c, ...delaunay.neighbors(c)];
+}
+
+function malujLad(idx, cel) {
+  pobierzBazowy(idx);
+  const przed = stanKorekty(idx);
+  const po = ustawKorekte(idx, { lad: cel });
+  zastosujDoZywegoStanu(idx, po);
+  aktualnaOperacja.zmiany.push({ rodzaj: "komorka", idx, przed, po });
+}
+
+function ustawPrzynaleznosc(idx, alt) {
+  if (!lad[idx]) return;   // przynależność ma sens tylko na lądzie
+  pobierzBazowy(idx);
+  const przed = stanKorekty(idx);
+  let po;
+  if (alt) {
+    po = ustawKorekte(idx, { panstwo: null, ziemia: null });
+  } else {
+    const pWyb = document.getElementById("e-panstwo").value;
+    const zWyb = document.getElementById("e-ziemia").value;
+    if (!pWyb || !zWyb) { pokazKomunikat("Wybierz państwo i ziemię docelową."); return; }
+    po = ustawKorekte(idx, { panstwo: pWyb, ziemia: zWyb });
+  }
+  zastosujDoZywegoStanu(idx, po);
+  aktualnaOperacja.zmiany.push({ rodzaj: "komorka", idx, przed, po });
+}
+
+function usunKorekteKomorki(idx) {
+  if (!korektyKomorek.has(idx)) return false;
+  const przed = stanKorekty(idx);
+  korektyKomorek.delete(idx);
+  zastosujDoZywegoStanu(idx, null);
+  aktualnaOperacja.zmiany.push({ rodzaj: "komorka", idx, przed, po: null });
+  return true;
+}
+
+function przelaczKrawedz(ia, ib, typ) {
+  const klucz = kluczPary(ia, ib);
+  const przed = korektyKrawedzi.get(klucz) || null;
+  zerwaneSet.delete(klucz); rzekiPary.delete(klucz);
+  let po = null;
+  if (!(przed && przed.typ === typ)) {
+    po = { a: [lonlat[ia*2], lonlat[ia*2+1]], b: [lonlat[ib*2], lonlat[ib*2+1]], typ };
+    korektyKrawedzi.set(klucz, po);
+    if (typ === "ciesnina") zerwaneSet.add(klucz); else rzekiPary.add(klucz);
+  } else {
+    korektyKrawedzi.delete(klucz);
+  }
+  aktualnaOperacja.zmiany.push({ rodzaj: "krawedz", klucz, przed, po });
+}
+
+function usunKorekteKrawedzi(klucz) {
+  const przed = korektyKrawedzi.get(klucz);
+  if (!przed) return false;
+  korektyKrawedzi.delete(klucz);
+  zerwaneSet.delete(klucz); rzekiPary.delete(klucz);
+  aktualnaOperacja.zmiany.push({ rodzaj: "krawedz", klucz, przed, po: null });
+  return true;
+}
+
+// Odległość punktu od ODCINKA (nie od prostej) — do wskazywania krawędzi myszą.
+function odlegloscOdOdcinka(px, py, x1, y1, x2, y2) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const dd = dx*dx + dy*dy;
+  let t = dd > 0 ? ((px - x1)*dx + (py - y1)*dy) / dd : 0;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (x1 + t*dx), py - (y1 + t*dy));
+}
+// Szukamy tylko wśród krawędzi SĄSIADUJĄCYCH z najbliższą komórką (garść
+// odcinków, nie wszystkie ~180 tys.) — stąd błyskawiczne, mimo braku
+// dedykowanej struktury przestrzennej dla samych krawędzi.
+function najblizszaKrawedz(x, y) {
+  const c = delaunay.find(x, y);
+  let najlepsza = null, najlD = Infinity;
+  for (const nb of delaunay.neighbors(c)) {
+    const seg = krawEdgeMap.get(kluczPary(c, nb));
+    if (!seg) continue;
+    const d = odlegloscOdOdcinka(x, y, seg[0], seg[1], seg[2], seg[3]);
+    if (d < najlD) { najlD = d; najlepsza = [c, nb]; }
+  }
+  const prog = 10 / kam.s;   // stała TOLERANCJA EKRANOWA — dzielimy przez zoom
+  return najlD <= prog ? najlepsza : null;
+}
+
+function wykonajNarzedzie(ev, pierwszy) {
+  const [x, y] = naSwiat(ev);
+  if (x < 0 || y < 0 || x > W || y > H) return;
+  if (narzedzie === "lad") {
+    const c = delaunay.find(x, y);
+    if (pierwszy) celPedzlaLad = !lad[c];
+    for (const cc of komorkiPedzla(c)) {
+      if (dotknieteWTymPociagnieciu.has(cc)) continue;
+      dotknieteWTymPociagnieciu.add(cc);
+      malujLad(cc, celPedzlaLad);
+    }
+  } else if (narzedzie === "przynaleznosc" && pierwszy) {
+    ustawPrzynaleznosc(delaunay.find(x, y), ev.altKey);
+  } else if ((narzedzie === "ciesnina" || narzedzie === "rzeka") && pierwszy) {
+    const kraw = najblizszaKrawedz(x, y);
+    if (kraw) przelaczKrawedz(kraw[0], kraw[1], narzedzie);
+    else pokazKomunikat("Kliknij bliżej granicy między dwiema komórkami.");
+  } else if (narzedzie === "gumka" && pierwszy) {
+    const kraw = najblizszaKrawedz(x, y);
+    const kluczKraw = kraw && kluczPary(kraw[0], kraw[1]);
+    if (kraw && korektyKrawedzi.has(kluczKraw)) {
+      usunKorekteKrawedzi(kluczKraw);
+    } else if (!usunKorekteKomorki(delaunay.find(x, y))) {
+      pokazKomunikat("Ta komórka/krawędź nie ma korekty do usunięcia.");
+    }
+  }
+}
+
+// Prawdziwa linia brzegowa Natural Earth — dane już mamy w meta.wybrzeze
+// (piksele tego samego "płótna" co punkty, więc zero przeliczeń). Rysowana
+// TYLKO w edytorze, jako pomoc przy porównywaniu z wygenerowanym lądem.
+const sciezkaWybrzezeNE = new Path2D();
+(meta.wybrzeze || []).forEach(ring => {
+  ring.forEach(([x, y], i) => { if (i === 0) sciezkaWybrzezeNE.moveTo(x, y); else sciezkaWybrzezeNE.lineTo(x, y); });
+});
+let pokazWybrzezeNE = true;
+
+// Zapis korekt do JSON-u (lonlat komórek dociągany PRZY BUDOWANIU, nie
+// trzymany w mapie — zawsze świeży, z bieżącej siatki).
+function zbudujKorektyDoZapisu() {
+  const komorki = [];
+  for (const [idx, pola] of korektyKomorek) {
+    komorki.push({ lonlat: [Math.round(lonlat[idx*2]*1000)/1000, Math.round(lonlat[idx*2+1]*1000)/1000], ...pola });
+  }
+  const krawedzie = [...korektyKrawedzi.values()];
+  return { wersja: 1, komorki, krawedzie };
+}
+async function zapiszKorekty() {
+  const odp = await fetch("/api/korekty", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(zbudujKorektyDoZapisu()),
+  });
+  if (!odp.ok) throw new Error(`serwer odpowiedział ${odp.status}`);
+  const wynik = await odp.json();
+  zmianyNiezapisane = 0;
+  odswiezLicznikZmian();
+  pokazKomunikat(`Zapisano korekty: ${wynik.zapisano} wpisów.`, 2500);
+}
+
+if (EDYTOR) {
+  document.getElementById("pasek-edytor").style.display = "flex";
+
+  const narzedziaBtn = {
+    lad: document.getElementById("e-lad"),
+    przynaleznosc: document.getElementById("e-przynaleznosc"),
+    ciesnina: document.getElementById("e-ciesnina"),
+    rzeka: document.getElementById("e-rzeka"),
+    gumka: document.getElementById("e-gumka"),
+  };
+  Object.entries(narzedziaBtn).forEach(([nazwa, btn]) => {
+    btn.onclick = () => {
+      if (btn.disabled) return;
+      narzedzie = nazwa;
+      Object.values(narzedziaBtn).forEach(b => b.classList.remove("aktywny"));
+      btn.classList.add("aktywny");
+    };
+  });
+
+  const wyborPanstwoEdytor = document.getElementById("e-panstwo");
+  const wyborZiemiaEdytor = document.getElementById("e-ziemia");
+  if (TRYB_SCENARIUSZA) {
+    meta.panstwa.forEach(p => {
+      const o = document.createElement("option");
+      o.value = p.klucz; o.textContent = p.nazwa_gry;
+      wyborPanstwoEdytor.appendChild(o);
+    });
+    function odswiezZiemieEdytor() {
+      const pid = idPanstwaZKlucza(wyborPanstwoEdytor.value);
+      wyborZiemiaEdytor.innerHTML = "";
+      meta.ziemie.forEach((z, i) => {
+        if (wlasciciel[i] !== pid) return;
+        const o = document.createElement("option");
+        o.value = z.nazwa_robocza; o.textContent = `${z.nazwa_gry} (${z.nazwa_robocza})`;
+        wyborZiemiaEdytor.appendChild(o);
+      });
+    }
+    wyborPanstwoEdytor.onchange = odswiezZiemieEdytor;
+    odswiezZiemieEdytor();
+  } else {
+    // Format korekt "panstwo"/"ziemia" ma sens tylko w scenariuszu — bez
+    // niego narzędzie nie miałoby czego przypisywać, więc je wyłączamy.
+    narzedziaBtn.przynaleznosc.disabled = true;
+    wyborPanstwoEdytor.disabled = true;
+    wyborZiemiaEdytor.disabled = true;
+  }
+
+  const btnWybrzeze = document.getElementById("e-wybrzeze");
+  btnWybrzeze.onclick = () => {
+    pokazWybrzezeNE = !pokazWybrzezeNE;
+    btnWybrzeze.classList.toggle("aktywny", pokazWybrzezeNE);
+    zaplanujRysowanie();
+  };
+
+  document.getElementById("e-zapisz").onclick = async () => {
+    try { await zapiszKorekty(); }
+    catch (err) { pokazKomunikat("Błąd zapisu: " + err.message, 4000); }
+  };
+
+  // Niezapisane zmiany giną bezpowrotnie przy zamknięciu karty — ostrzegamy,
+  // dokładnie jak prosi brief ("nagłówek pokazuje licznik... ostrzeżenie
+  // przy zamknięciu karty z niezapisanymi zmianami").
+  window.addEventListener("beforeunload", ev => {
+    if (zmianyNiezapisane > 0) { ev.preventDefault(); ev.returnValue = ""; }
+  });
+
+  odswiezLicznikZmian();
+  odswiezPedzel();
+}
 
 /* ===========================================================================
    4. RYSOWANIE NA EKRAN (kamera: pan + zoom)
@@ -279,6 +713,23 @@ function zaplanujRysowanie() {
   if (czekaNaKlatke) return;
   czekaNaKlatke = true;
   requestAnimationFrame(() => { czekaNaKlatke = false; rysuj(); });
+}
+
+// Batching PRZEBUDOWY geometrii (edytor): malowanie przeciąganiem potrafi
+// dotknąć dziesiątki komórek między klatkami — przeliczamy diagram i wypalamy
+// warstwy najwyżej raz na klatkę, dokładnie tym samym trikiem co zaplanujRysowanie.
+let czekaNaPrzebudowe = false;
+function zaplanujPrzebudowe() {
+  if (czekaNaPrzebudowe) return;
+  czekaNaPrzebudowe = true;
+  requestAnimationFrame(() => {
+    czekaNaPrzebudowe = false;
+    przebudujGeometrie();
+    przebudujGranice();
+    wypalWladcow();
+    wypalNiczyje();
+    rysuj();
+  });
 }
 
 // Limity zoomu liczone ZAWSZE od skali "cała mapa mieści się w oknie" — nie
@@ -370,6 +821,30 @@ function rysuj() {
     }
   }
 
+  // --- pomoce ekranowe edytora (brief 0004) --------------------------------
+  if (EDYTOR) {
+    if (pokazWybrzezeNE) {
+      g.save();
+      g.setLineDash([4 / kam.s, 3 / kam.s]);
+      g.strokeStyle = "#c9a227"; g.lineWidth = 1.3 / kam.s;
+      g.stroke(sciezkaWybrzezeNE);
+      g.restore();
+    }
+    // rzeki: znacznik/rysunek, bez wpływu na mechanikę (na razie)
+    g.setLineDash([]);
+    g.strokeStyle = "#3d7dc9"; g.lineWidth = 1.6 / kam.s;
+    g.stroke(sciezkaRzek);
+    // komórki z korektą: mały gruby znacznik w środku, żeby było widać co
+    // jest ręczne, a co automatyczne (bez tego trudno odróżnić po samym kolorze)
+    g.fillStyle = "#e8c85a";
+    const promien = 3 / kam.s;
+    for (const idx of korektyKomorek.keys()) {
+      g.beginPath();
+      g.arc(punkty[idx*2], punkty[idx*2+1], promien, 0, Math.PI * 2);
+      g.fill();
+    }
+  }
+
   if (licznikKlatek) {
     czasyKlatek.push(performance.now() - t0);
     if (czasyKlatek.length > 30) czasyKlatek.shift();
@@ -392,6 +867,14 @@ window.addEventListener("keydown", ev => {
     if (!licznikKlatek) klatkaEl.textContent = "";
     zaplanujRysowanie();
   }
+  if (EDYTOR) {
+    if (ev.key === "[") { promienPedzla = 1; odswiezPedzel(); }
+    if (ev.key === "]") { promienPedzla = 2; odswiezPedzel(); }
+    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "z") {
+      ev.preventDefault();
+      cofnijOperacje();
+    }
+  }
 });
 // "podwójny klik prawym" nie istnieje jako natywne zdarzenie — prawy klik
 // zawsze budzi "contextmenu", więc dwa takie zdarzenia blisko w czasie to
@@ -405,7 +888,13 @@ cv.addEventListener("contextmenu", ev => {
 });
 
 /* ===========================================================================
-   5. INTERAKCJA: hover, pan, zoom, podbój
+   5. INTERAKCJA: hover, pan, zoom, podbój — oraz (w edytorze) narzędzia
+   Poza edytorem lewy przycisk panoramuje, tak jak zawsze. W edytorze lewy
+   przycisk jest zarezerwowany dla aktywnego narzędzia (maluj/klik/gumka),
+   a panoramowanie przenosi się na PRAWY przycisk — stąd warunek na ev.button
+   niżej. Prawy przycisk już wcześniej działał jako pan (kod nie sprawdzał
+   guzika), więc w edytorze po prostu z tego korzystamy zamiast zabierać
+   lewy przycisk graczowi bez edytora.
    =========================================================================== */
 function naSwiat(ev) {
   const r = cv.getBoundingClientRect();
@@ -413,6 +902,10 @@ function naSwiat(ev) {
           (ev.clientY - r.top  - kam.ty) / kam.s];
 }
 cv.addEventListener("pointermove", ev => {
+  if (edytorAktywny) {
+    wykonajNarzedzie(ev, false);
+    return;
+  }
   if (nacisk && !przeciagam) {
     const dx = ev.clientX - nacisk.x, dy = ev.clientY - nacisk.y;
     if (dx*dx + dy*dy > PROG_PX*PROG_PX) przeciagam = true;
@@ -432,12 +925,26 @@ cv.addEventListener("pointermove", ev => {
   if (nowy !== hoverCel) { hoverCel = nowy; odswiezInfo(); zaplanujRysowanie(); }
 });
 cv.addEventListener("pointerdown", ev => {
+  if (EDYTOR && ev.button === 0) {
+    ev.preventDefault();
+    rozpocznijOperacje();
+    wykonajNarzedzie(ev, true);
+    edytorAktywny = true;
+    cv.setPointerCapture(ev.pointerId);
+    return;
+  }
   nacisk = { x: ev.clientX, y: ev.clientY };
   poprzednia = { x: ev.clientX, y: ev.clientY };
   przeciagam = false;
   cv.setPointerCapture(ev.pointerId);
 });
 cv.addEventListener("pointerup", ev => {
+  if (edytorAktywny) {
+    zakonczOperacje();
+    edytorAktywny = false;
+    nacisk = null; poprzednia = null; przeciagam = false;
+    return;
+  }
   // Kliknięcie = wciśnięcie i puszczenie BEZ przekroczenia progu przeciągania.
   // Shift+klik = podbój jednostki dla wybranego właściciela.
   // Zauważ: klient NICZEGO nie zmienia sam — wysyła rozkaz, a prawda
@@ -453,6 +960,7 @@ cv.addEventListener("pointerup", ev => {
   nacisk = null; poprzednia = null; przeciagam = false;
 });
 cv.addEventListener("pointerleave", () => {
+  if (edytorAktywny) { zakonczOperacje(); edytorAktywny = false; }
   nacisk = null; poprzednia = null; przeciagam = false;
   hoverCel = -1; odswiezInfo(); zaplanujRysowanie();
 });
@@ -541,8 +1049,9 @@ suwak.oninput = () => {
 };
 synchronizujSuwak();
 
-// Komunikat tymczasowy (np. odmowa podboju) przykrywa panel info na chwilę,
-// niezależnie od tego, co akurat pokazuje hover — potem wraca normalny widok.
+// Komunikat tymczasowy (np. odmowa podboju, komunikaty edytora) przykrywa
+// panel info na chwilę, niezależnie od tego, co akurat pokazuje hover —
+// potem wraca normalny widok.
 let komunikat = null;   // {tekst, doCzasu}
 function pokazKomunikat(tekst, ms = 3000) {
   komunikat = { tekst, doCzasu: performance.now() + ms };
@@ -557,44 +1066,59 @@ function odswiezInfo() {
     info.innerHTML = `<b style="color:#e07050">${komunikat.tekst}</b>`;
     return;
   }
+  let html;
   if (hoverCel < 0) {
-    info.innerHTML = `<span class="szary">Najedź na obszar. Kółko/gest = zoom,
+    html = `<span class="szary">Najedź na obszar. Kółko/gest = zoom,
       przeciągnij = przesuń.<br><b>Shift+klik</b> = podbój ziemi OBCEGO
       państwa dla wybranego państwa.<br><b>Home</b> albo podwójny prawy klik
       = powrót do widoku startowego.</span>`;
-    return;
-  }
-  const j = komJednostka[hoverCel];
-  if (j < 0) {
-    // ziemia niczyja — brak podziału wewnętrznego, sama populacja tła
-    info.innerHTML =
-      `<span class="szary" style="letter-spacing:.14em;text-transform:uppercase">
-         ziemie niczyje</span><br>
-       populacja razem: <b>${Math.round(niczyjePop).toLocaleString("pl")}</b>`;
-    return;
-  }
-  const w = wlasciciel[j];
-  if (TRYB_SCENARIUSZA) {
-    const z = meta.ziemie[j];
-    const p = meta.panstwa[w];
-    const wladca = p.wladca && p.wladca.imie
-      ? `${p.wladca.imie}${p.wladca.tytul ? ", " + p.wladca.tytul : ""}` : "—";
-    info.innerHTML =
-      `<span class="zloto" style="letter-spacing:.14em;text-transform:uppercase">
-         ${p.nazwa_gry}</span><br>
-       <b style="font-size:15px">${z.nazwa_gry}</b>
-       <span class="szary">(${z.nazwa_robocza})</span><br>
-       władca: <b>${wladca}</b><br>
-       populacja: <b>${Math.round(jednPop[j] || 0).toLocaleString("pl")}</b><br>
-       dochód/tick: <b>${(+jednDoch[j] || 0).toFixed(1)}</b>`;
   } else {
-    info.innerHTML =
-      `<span class="zloto" style="letter-spacing:.14em;text-transform:uppercase">
-         Królestwo ${meta.nazwy_krol[w]}</span><br>
-       <b style="font-size:15px">${nazwaJednostkiGry(j)}</b><br>
-       populacja: <b>${Math.round(jednPop[j] || 0).toLocaleString("pl")}</b><br>
-       dochód/tick: <b>${(+jednDoch[j] || 0).toFixed(1)}</b>`;
+    const j = komJednostka[hoverCel];
+    if (j < 0) {
+      // ziemia niczyja — brak podziału wewnętrznego, sama populacja tła
+      html =
+        `<span class="szary" style="letter-spacing:.14em;text-transform:uppercase">
+           ziemie niczyje</span><br>
+         populacja razem: <b>${Math.round(niczyjePop).toLocaleString("pl")}</b>`;
+    } else {
+      const w = wlasciciel[j];
+      if (TRYB_SCENARIUSZA) {
+        const z = meta.ziemie[j];
+        const p = meta.panstwa[w];
+        const wladca = p.wladca && p.wladca.imie
+          ? `${p.wladca.imie}${p.wladca.tytul ? ", " + p.wladca.tytul : ""}` : "—";
+        html =
+          `<span class="zloto" style="letter-spacing:.14em;text-transform:uppercase">
+             ${p.nazwa_gry}</span><br>
+           <b style="font-size:15px">${z.nazwa_gry}</b>
+           <span class="szary">(${z.nazwa_robocza})</span><br>
+           władca: <b>${wladca}</b><br>
+           populacja: <b>${Math.round(jednPop[j] || 0).toLocaleString("pl")}</b><br>
+           dochód/tick: <b>${(+jednDoch[j] || 0).toFixed(1)}</b>`;
+      } else {
+        html =
+          `<span class="zloto" style="letter-spacing:.14em;text-transform:uppercase">
+             Królestwo ${meta.nazwy_krol[w]}</span><br>
+           <b style="font-size:15px">${nazwaJednostkiGry(j)}</b><br>
+           populacja: <b>${Math.round(jednPop[j] || 0).toLocaleString("pl")}</b><br>
+           dochód/tick: <b>${(+jednDoch[j] || 0).toFixed(1)}</b>`;
+      }
+    }
   }
+  // Panel edytora: lon/lat komórki, jej obecny stan, czy ma korektę —
+  // dopisany NA KOŃCU, żeby nie rozgałęziać powyższej logiki widoku.
+  if (EDYTOR && hoverCel >= 0) {
+    const lo = lonlat[hoverCel*2].toFixed(3), la = lonlat[hoverCel*2+1].toFixed(3);
+    const maKorekte = korektyKomorek.has(hoverCel);
+    const ziemiaTxt = TRYB_SCENARIUSZA
+      ? (komZiemia[hoverCel] >= 0 ? meta.ziemie[komZiemia[hoverCel]].nazwa_robocza : "niczyje")
+      : "—";
+    html += `<hr class="roz">
+      <span class="szary">EDYTOR</span> · lon ${lo} lat ${la}<br>
+      ląd: <b>${lad[hoverCel] ? "tak" : "nie"}</b> · ziemia: <b>${ziemiaTxt}</b><br>
+      korekta: <b style="color:${maKorekte ? "#c9a227" : "#8a8272"}">${maKorekte ? "TAK" : "nie"}</b>`;
+  }
+  info.innerHTML = html;
 }
 function odswiezRanking() {
   const wiersze = Array.from({ length: nWlascicieli }, (_, w) => ({ w, s: skarbiec[w] }))

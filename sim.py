@@ -23,6 +23,9 @@ dokładnie jak dawniej (tryb proceduralny) — patrz CLAUDE.md, sekcja
 import json
 import pathlib
 import numpy as np
+from scipy.spatial import cKDTree
+
+import korekty as korekty_mod
 
 
 class Swiat:
@@ -31,17 +34,21 @@ class Swiat:
         plik_npz="world.npz",
         plik_meta="world_meta.json",
         plik_scenariusza="scenariusz_800.json",
+        plik_korekt="korekty.json",
     ):
         d = np.load(plik_npz)
         meta = json.load(open(plik_meta))
 
         # --- niezmienna geografia -------------------------------------------
         self.punkty = d["punkty"]            # (N,2) float32 — pozycje komórek
-        self.lad = d["lad"]                  # (N,)  bool
+        self.lonlat = d["lonlat"]            # (N,2) float32 — kanoniczna tożsamość (zasada 5)
+        self.lad = d["lad"].copy()           # (N,)  bool — kopia: korekty ją nadpisują
         self.indptr = d["indptr"]            # sąsiedztwo w formacie CSR
         self.indices = d["indices"]
         self.zyznosc = d["zyznosc"]          # (N,) 0..1
         self.komorka_pow = d["komorka_pow"]  # (N,) -> indeks powiatu (-1 = morze)
+        self.zerwane_a = d["zerwane_a"].copy()   # zerwane sąsiedztwa (cieśniny) — patrz krok 3
+        self.zerwane_b = d["zerwane_b"].copy()
         self.n_pow = meta["n_pow"]
         self.n_krol = meta["n_krol"]
         self.nazwy_pow = meta["nazwy_pow"]
@@ -65,9 +72,37 @@ class Swiat:
         self.kadr_startowy = None   # bbox startowej kamery (w px "płótna"), patrz scenariusz_800.py
         self.n_panstw = self.n_krol  # tryb proceduralny: państwo == królestwo
 
+        # ---------------------------------------------------------------------
+        # KOREKTY RĘCZNE (edytor świata, zadanie 0004) — nakładane W TEJ
+        # KOLEJNOŚCI, bo kolejne kroki od niej zależą (patrz brief 0004):
+        #   1. world.npz wczytany wyżej (surowa geografia)
+        #   2. korekty "lad"      — nadpisują maskę lądu
+        #   3. korekty krawędzi   — dopisują zerwane sąsiedztwa (cieśniny)
+        #   4. scenariusz wczytany niżej
+        #   5. korekty "panstwo"/"ziemia" — nadpisują przypisania SCENARIUSZA
+        #   6. oznaczenie komórek tkniętych ręcznie jako przypięte
+        # Plik NIE musi istnieć (świeży checkout) — wtedy to zero operacji.
+        # ---------------------------------------------------------------------
+        # Migawki SPRZED korekt (do czego wraca komórka po użyciu "gumki" w
+        # edytorze) — patrz server.py /api/korekty, pole "bazowe".
+        self.lad_bazowe = self.lad.copy()
+
+        korekty = korekty_mod.wczytaj(plik_korekt)
+        self._zastosuj_korekty_lad(korekty)
+        self._zastosuj_korekty_krawedzie(korekty)
+
         sciezka_scen = pathlib.Path(plik_scenariusza)
         if sciezka_scen.exists():
             self._wczytaj_scenariusz(sciezka_scen)
+
+        self.kom_panstwo_bazowe = self.kom_panstwo.copy() if self.tryb_scenariusza else None
+        self.kom_ziemia_bazowa = self.kom_ziemia.copy()
+
+        self._zastosuj_korekty_panstwo(korekty)
+
+        self.przypiete = np.zeros(n, dtype=bool)   # komórki tknięte ręcznie
+        for idx, _ in korekty_mod.rozstrzygnij_komorki(korekty, self.lonlat):
+            self.przypiete[idx] = True
 
         # --- zmienny stan ekonomiczny (KOLUMNY per komórka) -----------------
         # populacja startowa: żyzne ziemie zaczynają ludniejsze, plus szczypta
@@ -125,6 +160,96 @@ class Swiat:
         )
 
         self.kadr_startowy = dane.get("kadr_startowy")
+
+    # ------------------------------------------------------------------------
+    # KOREKTY RĘCZNE (edytor świata) — patrz korekty.py i CLAUDE.md, sekcja
+    # "Korekty ręczne i edytor". Zasada: edytor nie zmienia world.npz ani
+    # scenariusz_800.json — dopisuje do korekty.json, a TU, przy wczytywaniu
+    # świata, korekty nakładają się na żywy stan. Restart serwera = od razu
+    # widać efekt, bez regeneracji (minuty -> sekundy).
+    # ------------------------------------------------------------------------
+    def _zastosuj_korekty_lad(self, korekty):
+        """Krok 2: korekty "lad" nadpisują maskę lądu. self.lad jest kopią
+        (patrz __init__), więc world.npz zostaje nietknięty na dysku."""
+        for idx, wpis in korekty_mod.rozstrzygnij_komorki(korekty, self.lonlat):
+            if "lad" in wpis:
+                self.lad[idx] = bool(wpis["lad"])
+
+        # Komórka zamieniona z morza na ląd nie ma jeszcze POWIATU (world.npz
+        # przydzielił go tylko lądowi ze swojej własnej generacji) — zostaje
+        # z komorka_pow == -1. W TRYBIE PROCEDURALNYM tick() grupuje dochód
+        # przez np.bincount(self.komorka_pow[self.lad], ...), a -1 w indeksach
+        # wywala ValueError na pierwszym ticku. Naprawiamy dokładnie tak samo
+        # jak sieroty w generate_world.py: najbliższy lądowy sąsiad z
+        # istniejącym powiatem użycza swojego. Nieszkodliwe też w trybie
+        # scenariusza — komorka_pow tam się w ogóle nie liczy.
+        braki = np.flatnonzero(self.lad & (self.komorka_pow < 0))
+        if len(braki):
+            ma_powiat = np.flatnonzero(self.lad & (self.komorka_pow >= 0))
+            if len(ma_powiat):
+                drzewo = cKDTree(self.punkty[ma_powiat])
+                _, najblizszy = drzewo.query(self.punkty[braki])
+                self.komorka_pow[braki] = self.komorka_pow[ma_powiat[najblizszy]]
+
+    def _zastosuj_korekty_krawedzie(self, korekty):
+        """Krok 3: korekty krawędzi typu "ciesnina" dopisują pary do zerwanych
+        sąsiedztw (dokładnie jak CIESNINY w generate_world.py, tylko bez
+        regeneracji świata). Typ "rzeka" NIE rusza sąsiedztwa — na razie to
+        czysty znacznik do narysowania przez klienta (patrz brief 0004)."""
+        zerwane = set(zip(self.zerwane_a.tolist(), self.zerwane_b.tolist()))
+        nowe_a, nowe_b = [], []
+        for ia, ib, wpis in korekty_mod.rozstrzygnij_krawedzie(korekty, self.lonlat):
+            if wpis.get("typ") != "ciesnina":
+                continue
+            if ia == ib:
+                print(f"UWAGA korekty: krawędź '{wpis.get('notatka', '')}' "
+                      f"wskazuje jedną i tę samą komórkę po obu stronach — pomijam")
+                continue
+            sasiedzi_a = self.indices[self.indptr[ia]:self.indptr[ia + 1]]
+            if ib not in sasiedzi_a:
+                print(f"UWAGA korekty: krawędź '{wpis.get('notatka', '')}' — "
+                      f"komórki {ia}/{ib} nie są sąsiadami w grafie (siatka "
+                      f"się zmieniła? wpis wymaga poprawki)")
+            para = (ia, ib) if ia < ib else (ib, ia)
+            if para not in zerwane:
+                zerwane.add(para)
+                nowe_a.append(para[0]); nowe_b.append(para[1])
+        if nowe_a:
+            self.zerwane_a = np.concatenate([self.zerwane_a, np.array(nowe_a, dtype=np.int32)])
+            self.zerwane_b = np.concatenate([self.zerwane_b, np.array(nowe_b, dtype=np.int32)])
+
+    def _zastosuj_korekty_panstwo(self, korekty):
+        """Krok 5: korekty "panstwo"/"ziemia" nadpisują przypisania SCENARIUSZA
+        (jednostką polityczną scenariusza jest ziemia — patrz CLAUDE.md).
+        Bez scenariusza te pola nie mają czego nadpisywać, więc nic nie robimy."""
+        if not self.tryb_scenariusza:
+            return
+        id_panstwa = {p["klucz"]: i for i, p in enumerate(self.panstwa)}
+        id_ziemi = {z["nazwa_robocza"]: i for i, z in enumerate(self.ziemie)}
+        for idx, wpis in korekty_mod.rozstrzygnij_komorki(korekty, self.lonlat):
+            if "ziemia" in wpis:
+                nazwa = wpis["ziemia"]
+                if nazwa is None:
+                    self.kom_ziemia[idx] = -1
+                elif nazwa in id_ziemi:
+                    zi = id_ziemi[nazwa]
+                    self.kom_ziemia[idx] = zi
+                    # brak jawnego "panstwo" w tym samym wpisie -> ziemia
+                    # narzuca WŁASNEGO właściciela (spójność ziemia<->państwo)
+                    if "panstwo" not in wpis:
+                        self.kom_panstwo[idx] = int(self.ziemia_panstwo[zi])
+                else:
+                    print(f"UWAGA korekty: nieznana ziemia '{nazwa}' "
+                          f"({wpis.get('notatka', '')}) — pomijam pole ziemia")
+            if "panstwo" in wpis:
+                p = wpis["panstwo"]
+                if p is None:
+                    self.kom_panstwo[idx] = -1
+                elif p in id_panstwa:
+                    self.kom_panstwo[idx] = id_panstwa[p]
+                else:
+                    print(f"UWAGA korekty: nieznane państwo '{p}' "
+                          f"({wpis.get('notatka', '')}) — pomijam pole panstwo")
 
     # ------------------------------------------------------------------------
     @property

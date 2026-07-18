@@ -10,10 +10,12 @@ Wymaga wygenerowanego świata i scenariusza:
 """
 
 import json
+import pathlib
 import numpy as np
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 
+import korekty as korekty_mod
 from sim import Swiat
 
 # Musi być zgodne z PROG_ODPRYSKU w scenariusz_800.py — składowa mniejsza
@@ -28,6 +30,42 @@ def sprawdz(nazwa, warunek):
     print(("OK " if warunek else "ZLE"), nazwa)
     if not warunek:
         OK = False
+
+
+def spojnosc_panstw(kom_panstwo, ii, jj, n, nazwy_panstw, przypiete):
+    """Czy komórki każdego państwa (id = pozycja w nazwy_panstw) tworzą jedną
+    spójną składową na grafie (ii,jj)? Składowe z choć jedną przypiętą
+    komórką ORAZ składowe >= PROG_ODPRYSKU są dopuszczone (prawdziwe wyspy /
+    ręcznie chronione przypadki) — DOKŁADNIE ta sama reguła co w
+    scenariusz_800.py (_wyczysc_spojnosc), bo to sprawdzenie ma wykryć, kiedy
+    te dwa miejsca się rozjadą (patrz kryterium 4 i regresja niżej)."""
+    spojne = True
+    wyspy = []
+    for pid, nazwa in enumerate(nazwy_panstw):
+        idx = np.flatnonzero(kom_panstwo == pid)
+        if len(idx) == 0:
+            continue
+        maska_e = (kom_panstwo[ii] == pid) & (kom_panstwo[jj] == pid)
+        a, b = ii[maska_e], jj[maska_e]
+        lokalny = -np.ones(n, dtype=np.int64)
+        lokalny[idx] = np.arange(len(idx))
+        mat = csr_matrix(
+            (np.ones(len(a)), (lokalny[a], lokalny[b])),
+            shape=(len(idx), len(idx)),
+        )
+        n_skladowych, etykiety = connected_components(mat, directed=False)
+        rozmiary = np.bincount(etykiety, minlength=n_skladowych)
+        najwieksza = int(rozmiary.argmax())
+        for sk in range(n_skladowych):
+            if sk == najwieksza:
+                continue
+            rozmiar = int(rozmiary[sk])
+            komorki_sk = idx[etykiety == sk]
+            if przypiete[komorki_sk].any() or rozmiar >= PROG_ODPRYSKU:
+                wyspy.append((nazwa, rozmiar))
+            else:
+                spojne = False
+    return spojne, wyspy
 
 
 # ----------------------------------------------------------------------------
@@ -67,10 +105,18 @@ sprawdz(
 
 # 4. Komórki każdego państwa tworzą JEDNĄ spójną składową na grafie
 # sąsiedztwa (z pominięciem zerwanych cieśnin — wyspa oddzielona cieśniną nie
-# jest sąsiadem lądu), poza jawnie dopuszczonymi wyspami >= PROG_ODPRYSKU.
-# Odpryski mniejsze od progu oznaczałyby, że scenariusz_800.py nie posprzątał
-# eksklaw/dziur po teście punkt-w-poligonie (patrz brief 0003, część B).
+# jest sąsiadem lądu), poza jawnie dopuszczonymi wyspami >= PROG_ODPRYSKU
+# ORAZ poza składowymi z choć jedną komórką PRZYPIĘTĄ w korekty.json —
+# scenariusz_800.py te ostatnie celowo chroni bez względu na rozmiar (edytor
+# świata, zadanie 0004: "przypięta komórka — automatyczne czyszczenie jej nie
+# rusza"), więc to sprawdzenie musi rozumować DOKŁADNIE tak samo, inaczej
+# poprawnie przywrócona mała wysepka (np. Sheppey) wygląda tu jak regresja.
+# Odpryski mniejsze od progu i NIEPRZYPIĘTE oznaczałyby, że scenariusz_800.py
+# nie posprzątał eksklaw/dziur po teście punkt-w-poligonie (brief 0003, część B).
 n = len(lad)
+przypiete = np.zeros(n, dtype=bool)
+for _idx in korekty_mod.komorki_przypiete(korekty_mod.wczytaj(), d["lonlat"]):
+    przypiete[_idx] = True
 indptr, indices = d["indptr"], d["indices"]
 zerwane_a, zerwane_b = d["zerwane_a"], d["zerwane_b"]
 _ii = np.repeat(np.arange(n), np.diff(indptr))
@@ -82,31 +128,8 @@ _zerw |= set(zip(zerwane_b.tolist(), zerwane_a.tolist()))
 _zywe = np.array([(a, b) not in _zerw for a, b in zip(_ii.tolist(), _jj.tolist())])
 _ii, _jj = _ii[_zywe], _jj[_zywe]
 
-spojne = True
-wyspy = []
-for pid, (klucz, panstwo) in enumerate(dane["panstwa"].items()):
-    idx = np.flatnonzero(kom_panstwo == pid)
-    if len(idx) == 0:
-        continue
-    maska_e = (kom_panstwo[_ii] == pid) & (kom_panstwo[_jj] == pid)
-    a, b = _ii[maska_e], _jj[maska_e]
-    lokalny = -np.ones(n, dtype=np.int64)
-    lokalny[idx] = np.arange(len(idx))
-    mat = csr_matrix(
-        (np.ones(len(a)), (lokalny[a], lokalny[b])),
-        shape=(len(idx), len(idx)),
-    )
-    n_skladowych, etykiety = connected_components(mat, directed=False)
-    rozmiary = np.bincount(etykiety, minlength=n_skladowych)
-    najwieksza = int(rozmiary.argmax())
-    for sk in range(n_skladowych):
-        if sk == najwieksza:
-            continue
-        rozmiar = int(rozmiary[sk])
-        if rozmiar >= PROG_ODPRYSKU:
-            wyspy.append((panstwo["nazwa_robocza"], rozmiar))
-        else:
-            spojne = False
+_nazwy_panstw = [p["nazwa_robocza"] for p in dane["panstwa"].values()]
+spojne, wyspy = spojnosc_panstw(kom_panstwo, _ii, _jj, n, _nazwy_panstw, przypiete)
 
 sprawdz(
     f"komórki każdego państwa tworzą jedną spójną składową "
@@ -151,6 +174,112 @@ sprawdz(
     "podbój ziemi niczyjej (ziemia=-1) zwraca jawną odmowę",
     isinstance(wynik_podboju, dict) and wynik_podboju.get("typ") == "odmowa",
 )
+
+# ----------------------------------------------------------------------------
+# 7. KOREKTY RĘCZNE (edytor świata, zadanie 0004) — to, co ręcznie ustawione,
+# musi faktycznie obowiązywać po wczytaniu Swiat(). Dwie części:
+#   a) syntetyczny plik korekt (zawsze uruchamiany — nie zależy od tego, czy
+#      ktoś już czegoś poprawił ręcznie w TYM repo) sprawdza sam MECHANIZM;
+#   b) jeśli w repo istnieje PRAWDZIWY korekty.json, jego wpisy też muszą się
+#      odzwierciedlić w stanie zwykłego Swiat() — to dodatkowa siatka
+#      bezpieczeństwa nad ręczną pracą autora.
+# ----------------------------------------------------------------------------
+plik_korekt_tmp = "korekty_test_tmp.json"
+try:
+    # komórka morska -> ma zostać lądem; komórka lądowa niczyja -> ma trafić
+    # do Kentu/Dover (dokładnie przypadek "przypięcia" Sheppey z briefu 0004).
+    idx_morska = int(np.flatnonzero(~lad)[0])
+    ziemia_kent = next(z for z in ziemie if z["panstwo"] == "kent")
+    idx_niczyje = int(np.flatnonzero(lad & (kom_panstwo < 0))[0])
+
+    json.dump({
+        "wersja": 1,
+        "komorki": [
+            {"lonlat": d["lonlat"][idx_morska].tolist(), "lad": True, "notatka": "test"},
+            {"lonlat": d["lonlat"][idx_niczyje].tolist(),
+             "panstwo": "kent", "ziemia": ziemia_kent["nazwa_robocza"], "notatka": "test"},
+        ],
+        "krawedzie": [],
+    }, open(plik_korekt_tmp, "w"), ensure_ascii=False)
+
+    s2 = Swiat(plik_korekt=plik_korekt_tmp)
+    sprawdz(
+        "korekta 'lad' na syntetycznym pliku: komórka morska staje się lądem",
+        bool(s2.lad[idx_morska]),
+    )
+    id_kent = next(i for i, p in enumerate(s2.panstwa) if p["klucz"] == "kent")
+    sprawdz(
+        "korekta 'panstwo'/'ziemia' na syntetycznym pliku: komórka niczyja trafia do Kentu",
+        int(s2.wlasciciel_komorki[idx_niczyje]) == id_kent,
+    )
+    sprawdz(
+        "komórki dotknięte syntetycznym plikiem korekt są oznaczone jako przypięte",
+        bool(s2.przypiete[idx_morska]) and bool(s2.przypiete[idx_niczyje]),
+    )
+finally:
+    pathlib.Path(plik_korekt_tmp).unlink(missing_ok=True)
+
+# 7b. Korekta "lad" zamieniająca morze na ląd w TRYBIE PROCEDURALNYM (brak
+# scenariusz_800.json) nie może wywalić pierwszego ticku — nowo zalądowiona
+# komórka musi dostać powiat (regresja: bez tego np.bincount w tick() dostaje
+# -1 w indeksach i rzuca ValueError, patrz DZIENNIK.md).
+plik_korekt_proc = "korekty_test_proc_tmp.json"
+try:
+    idx_morska2 = int(np.flatnonzero(~lad)[1])
+    json.dump({
+        "wersja": 1,
+        "komorki": [{"lonlat": d["lonlat"][idx_morska2].tolist(), "lad": True, "notatka": "test"}],
+        "krawedzie": [],
+    }, open(plik_korekt_proc, "w"), ensure_ascii=False)
+
+    s4 = Swiat(plik_scenariusza="_scenariusz_ktory_nie_istnieje.json", plik_korekt=plik_korekt_proc)
+    sprawdz("Swiat() z korektą lad w trybie proceduralnym wchodzi w tryb proceduralny", not s4.tryb_scenariusza)
+    sprawdz(
+        "nowo zalądowiona komórka (tryb proceduralny) dostaje powiat (komorka_pow >= 0)",
+        int(s4.komorka_pow[idx_morska2]) >= 0,
+    )
+    try:
+        s4.tick()
+        tick_ok = True
+    except Exception as e:
+        tick_ok = False
+        print(f"     tick() rzucił: {type(e).__name__}: {e}")
+    sprawdz("tick() nie wywala się po korekcie lad w trybie proceduralnym", tick_ok)
+finally:
+    pathlib.Path(plik_korekt_proc).unlink(missing_ok=True)
+
+# 7c. Regresja dla kryterium 4: składowa PRZYPIĘTA, mniejsza niż PROG_ODPRYSKU
+# (dokładnie przypadek Sheppey — 2 komórki poniżej progu 4), nie może wyglądać
+# jak błąd spójności. Syntetyczny graf: korpus (0,1,2,3) + wyspa (4,5) bez
+# krawędzi do reszty; wyspa przypięta.
+_kp_syn = np.array([0, 0, 0, 0, 0, 0], dtype=np.int32)
+_ii_syn = np.array([0, 1, 1, 2, 2, 3, 4, 5])
+_jj_syn = np.array([1, 0, 2, 1, 3, 2, 5, 4])
+_przypiete_syn = np.array([False, False, False, False, True, True])
+_spojne_syn, _wyspy_syn = spojnosc_panstw(_kp_syn, _ii_syn, _jj_syn, 6, ["kent"], _przypiete_syn)
+sprawdz(
+    "składowa przypięta mniejsza niż PROG_ODPRYSKU nie liczy się jako błąd spójności",
+    _spojne_syn and _wyspy_syn == [("kent", 2)],
+)
+
+if pathlib.Path("korekty.json").exists():
+    prawdziwe = json.load(open("korekty.json", encoding="utf-8"))
+    s3 = Swiat()
+    from korekty import rozstrzygnij_komorki
+    for idx, wpis in rozstrzygnij_komorki(prawdziwe, s3.lonlat):
+        if "lad" in wpis:
+            sprawdz(
+                f"korekty.json: komórka {idx} ma lad={wpis['lad']} po wczytaniu",
+                bool(s3.lad[idx]) == bool(wpis["lad"]),
+            )
+        if "panstwo" in wpis and wpis["panstwo"] is not None:
+            id_p = next((i for i, p in enumerate(s3.panstwa) if p["klucz"] == wpis["panstwo"]), None)
+            sprawdz(
+                f"korekty.json: komórka {idx} należy do państwa '{wpis['panstwo']}' po wczytaniu",
+                id_p is not None and int(s3.wlasciciel_komorki[idx]) == id_p,
+            )
+else:
+    print("(korekty.json nie istnieje w repo — pominięto sprawdzenie realnego pliku)")
 
 print()
 print("WYNIK:", "wszystkie niezmienniki scenariusza OK" if OK else "SĄ BŁĘDY!")
