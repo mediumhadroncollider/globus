@@ -29,6 +29,17 @@ ZIARNO = 966             # seed: ta sama liczba => identyczny świat (odtwarzaln
 KOMOREK_NA_POWIAT = 30   # średni rozmiar powiatu w komórkach
 GESTOSC_WYBRZEZA = 4.0   # ile razy gęstsze komórki przy samym brzegu (1.0 = wyłącz)
 PAS_WYBRZEZA = 25        # zasięg zagęszczenia w px płótna (~75 km); dalej wygasa
+
+# OBSZARY SZCZEGÓŁOWE — tam, gdzie toczy się scenariusz, chcemy drobniejszą
+# siatkę. Zapis (jak wszystkie korekty) w GEOGRAFII: (lon, lat, promień_km,
+# mnożnik). Mnożnik dotyczy GĘSTOŚCI komórek; odstęp między nimi maleje jak
+# pierwiastek z mnożnika (×9 gęstości = komórki 3× bliżej siebie).
+# Uwaga na budżet: zagęszczenie małego obszaru kosztuje niewiele komórek
+# globalnie, ale mnożnik wchodzi do normalizacji próbkowania z odrzucaniem,
+# więc bardzo duże wartości spowalniają generację.
+OBSZARY_SZCZEGOLOWE = [
+    (0.55, 51.05, 120, 9.0),   # południowo-wschodnia Anglia: Kent i Sussex
+]
 POWIATOW_NA_KROLESTWO = 140
 W, H = 1500, 1150        # "płótno" świata w umownych jednostkach
 
@@ -128,9 +139,28 @@ for _ring in wybrzeze_px:
             _brzeg.append(_r[_i] + (_r[_i + 1] - _r[_i]) * (_t / _n_wst))
 drzewo_brzegu = cKDTree(np.array(_brzeg))
 
+# obszary szczegółowe przeliczone raz na piksele płótna
+_obszary_px = []
+for _lo, _la, _prom_km, _mn in OBSZARY_SZCZEGOLOWE:
+    _cx, _cy = na_plotno(*projektuj(np.array([_lo]), np.array([_la])))
+    # promień w px: 1 px płótna ≈ ile km? mierzymy przez przesunięcie o 1° szer.
+    _x2, _y2 = na_plotno(*projektuj(np.array([_lo]), np.array([_la + 1.0])))
+    _px_na_km = abs(_y2[0] - _cy[0]) / 111.32
+    _obszary_px.append((_cx[0], _cy[0], _prom_km * _px_na_km, _mn))
+
+# maksymalna możliwa waga surowa — potrzebna do normalizacji próbkowania
+_MAX_W = GESTOSC_WYBRZEZA * max([o[3] for o in _obszary_px], default=1.0)
+
 def waga_gestosci(pkt):
+    """Prawdopodobieństwo przyjęcia kandydata (0..1). Waga surowa to iloczyn:
+    (bliskość wybrzeża) × (obszary szczegółowe), znormalizowany przez maksimum."""
     d, _ = drzewo_brzegu.query(pkt, workers=-1)
-    return (1 + (GESTOSC_WYBRZEZA - 1) * np.exp(-d / PAS_WYBRZEZA)) / GESTOSC_WYBRZEZA
+    w = 1 + (GESTOSC_WYBRZEZA - 1) * np.exp(-d / PAS_WYBRZEZA)
+    for cx, cy, prom, mn in _obszary_px:
+        # gładkie przejście: pełny mnożnik w środku, wygasa na krawędzi obszaru
+        r = np.hypot(pkt[:, 0] - cx, pkt[:, 1] - cy)
+        w = w * (1 + (mn - 1) * np.exp(-(r / prom) ** 2))
+    return w / _MAX_W
 
 def losuj_wazone(ile):
     """Losuje `ile` punktów z gęstością ~waga_gestosci (odrzucanie)."""
@@ -143,7 +173,8 @@ def losuj_wazone(ile):
         brakuje -= len(przyjete[:brakuje])
     return np.concatenate(zebrane)
 
-print(f"Punkty: {N_KOMOREK} (gęstość wybrzeża ×{GESTOSC_WYBRZEZA}) …")
+print(f"Punkty: {N_KOMOREK} (wybrzeże ×{GESTOSC_WYBRZEZA}, "
+      f"obszary szczegółowe: {len(OBSZARY_SZCZEGOLOWE)}) …")
 punkty = losuj_wazone(N_KOMOREK).astype(np.float64)
 
 for iteracja in range(2):
@@ -389,6 +420,7 @@ nazwy_krol = [nazwa(los_n) for _ in range(n_krol)]
 np.savez_compressed(
     "world.npz",
     punkty=punkty.astype(np.float32),
+    lonlat=np.stack(odprojektuj(*z_plotna(punkty[:, 0], punkty[:, 1])), axis=1).astype(np.float32),
     lad=lad,
     indptr=indptr, indices=indices,
     komorka_pow=komorka_pow,
