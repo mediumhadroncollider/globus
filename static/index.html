@@ -62,6 +62,7 @@
   <canvas id="mapa"></canvas>
   <div class="panel" id="info">Łączę się ze światem…</div>
   <div class="panel" id="ranking"></div>
+  <div class="panel" id="klatka" style="right:14px; top:150px; display:none;"></div>
 </div>
 
 <script>
@@ -232,6 +233,19 @@ function wypalWladcow() {
 }
 wypalWladcow();
 
+// Ziemia niczyja jest CAŁKOWICIE NIEZMIENNA (żadna akcja jej nie rusza) —
+// wypalamy ją raz na osobny canvas, tak jak władców, zamiast fill+stroke
+// ~23 600 wielokątów w KAŻDEJ klatce map ciepła (odświeżają się co tick).
+const niczyjeCv = document.createElement("canvas");
+niczyjeCv.width = W * RS; niczyjeCv.height = H * RS;
+(function wypalNiczyje() {
+  const g = niczyjeCv.getContext("2d");
+  g.setTransform(RS, 0, 0, RS, 0, 0);
+  g.fillStyle = g.strokeStyle = KOLOR_NICZYJE;
+  g.lineWidth = 1;
+  g.fill(sciezkaNiczyje); g.stroke(sciezkaNiczyje);
+})();
+
 /* ===========================================================================
    4. RYSOWANIE NA EKRAN (kamera: pan + zoom)
    =========================================================================== */
@@ -239,6 +253,14 @@ const cv = document.getElementById("mapa");
 const scena = document.getElementById("scena");
 let kam = { s: 1, tx: 0, ty: 0, min: 0.1, max: 10 };
 let widok = "wladcy", hoverCel = -1;
+
+// Licznik czasu klatki (klawisz F) — żeby mierzyć koszt renderu zamiast
+// zgadywać "na oko" (patrz DZIENNIK.md, wpadka z brief 0003). Domyślnie
+// wyłączony: performance.now() wokół całej treści rysuj(), średnia z 30
+// ostatnich klatek, wypisywana w rogu obok plakietki statystyk (ranking).
+let licznikKlatek = false;
+const klatkaEl = document.getElementById("klatka");
+const czasyKlatek = [];
 
 // Próg przeciągania: pointerdown NIE zaczyna panoramowania od razu — dopiero
 // gdy kursor odjedzie o PROG_PX od miejsca wciśnięcia. Bez tego drżenie ręki
@@ -290,6 +312,7 @@ function ustawWidokStartowy() {
 function resetWidok() { ustawWidokStartowy(); zaplanujRysowanie(); }
 
 function rysuj() {
+  const t0 = licznikKlatek ? performance.now() : 0;
   const dpr = window.devicePixelRatio || 1;
   if (cv.width !== scena.clientWidth * dpr) {
     cv.width = scena.clientWidth * dpr; cv.height = scena.clientHeight * dpr;
@@ -304,8 +327,7 @@ function rysuj() {
   } else {
     g.fillStyle = "#26313c";
     g.fillRect(0, 0, W, H);
-    g.fillStyle = g.strokeStyle = KOLOR_NICZYJE;
-    g.fill(sciezkaNiczyje); g.stroke(sciezkaNiczyje);
+    g.drawImage(niczyjeCv, 0, 0, W, H);
     const dane = widok === "pop" ? jednPop : jednDoch;
     // normalizacja "per widok": 95. percentyl jako maks, żeby jedna bogata
     // jednostka nie spłaszczała całej skali barw
@@ -324,19 +346,35 @@ function rysuj() {
   // tak, jak zoom rośnie, więc na ekranie kreska ma zawsze tyle samo pikseli
   // (tak robią wszystkie mapy internetowe).
   g.lineJoin = g.lineCap = "round";
-  // przy mocnym oddaleniu granica jednostek (najgęstszy Path2D, ~180 tys.
-  // odcinków) jest i tak niewidoczna — pomijamy ją, żeby zoom nie dławił
-  if (kam.s >= kam.min * 3) {
+  // Przy mocnym oddaleniu granica jednostek (najgęstszy Path2D) jest i tak
+  // niewidoczna — pomijamy ją, żeby zoom nie dławił. To realnie chroni tylko
+  // TRYB PROCEDURALNY (grJednostka ~180 tys. odcinków, cała mapa podzielona
+  // na powiaty). W TRYBIE SCENARIUSZA grJednostka jest malutka — ziemia
+  // niczyja to jedna jednostka bez wewnętrznych krawędzi — więc próg *3 tylko
+  // niepotrzebnie chował granice ziem przy oddaleniu; *1.5 daje margines na
+  // wypadek dużych scenariuszy, nie kasując widoczności przy typowym zoomie.
+  if (kam.s >= kam.min * 1.5) {
     g.strokeStyle = "rgba(20,16,10,.4)"; g.lineWidth = 0.7 / kam.s; g.stroke(grJednostka);
   }
   g.strokeStyle = "#1d1912"; g.lineWidth = 2.6 / kam.s; g.stroke(grWlasciciel);
   g.strokeStyle = "#171d24"; g.lineWidth = 1.9 / kam.s; g.stroke(grBrzeg);
 
-  // podświetlenie jednostki (albo ziemi niczyjej) pod kursorem
+  // podświetlenie jednostki pod kursorem — ziemi niczyjej NIGDY (23 600
+  // wielokątów wypełnianych co klatkę zoomu; nie ma tam nic do wskazania,
+  // panel info i tak mówi, że to ziemie niczyje — patrz brief 0003).
   if (hoverCel >= 0 && lad[hoverCel]) {
     const j = komJednostka[hoverCel];
-    g.fillStyle = "rgba(255,250,235,.22)";
-    g.fill(j >= 0 ? sciezkaJednostki[j] : sciezkaNiczyje);
+    if (j >= 0) {
+      g.fillStyle = "rgba(255,250,235,.22)";
+      g.fill(sciezkaJednostki[j]);
+    }
+  }
+
+  if (licznikKlatek) {
+    czasyKlatek.push(performance.now() - t0);
+    if (czasyKlatek.length > 30) czasyKlatek.shift();
+    const srednia = czasyKlatek.reduce((a, b) => a + b, 0) / czasyKlatek.length;
+    klatkaEl.textContent = `klatka: ${srednia.toFixed(2)} ms (śr. ${czasyKlatek.length})`;
   }
 }
 ustawLimity(); ustawWidokStartowy(); rysuj();
@@ -347,6 +385,13 @@ window.addEventListener("resize", () => {
 });
 window.addEventListener("keydown", ev => {
   if (ev.key === "Home") { ev.preventDefault(); resetWidok(); }
+  if (ev.key === "f" || ev.key === "F") {
+    licznikKlatek = !licznikKlatek;
+    klatkaEl.style.display = licznikKlatek ? "block" : "none";
+    czasyKlatek.length = 0;
+    if (!licznikKlatek) klatkaEl.textContent = "";
+    zaplanujRysowanie();
+  }
 });
 // "podwójny klik prawym" nie istnieje jako natywne zdarzenie — prawy klik
 // zawsze budzi "contextmenu", więc dwa takie zdarzenia blisko w czasie to

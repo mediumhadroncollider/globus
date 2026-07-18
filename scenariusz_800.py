@@ -28,8 +28,17 @@ Wszystko kotwiczymy w lon/lat — nigdy w indeksach komórek (zasada 5 z CLAUDE.
 import json
 import numpy as np
 from matplotlib.path import Path
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import connected_components
 
 NIEZIEMIA = -1          # brak właściciela / brak ziemi
+
+# Próg odprysku (test spójności, część B2 briefu 0003): spójna składowa
+# komórek państwa mniejsza niż tyle komórek wraca do ziemi niczyjej (uznajemy
+# ją za szum na granicy, nie za prawdziwą wyspę). Składowe >= progu zostają
+# i lądują w logu jako wyspy (np. Sheppey, Thanet, Wight) — pokrętło do
+# regulacji, nie magiczna liczba w środku kodu.
+PROG_ODPRYSKU = 4
 
 # ----------------------------------------------------------------------------
 # OŚRODKI: prawdziwe grody, każdy zostanie stolicą jednej ziemi
@@ -89,12 +98,93 @@ PANSTWA = {
 }
 
 
+def _filtr_wiekszosciowy(kom_panstwo, lad, indptr, indices, n_panstw):
+    """Każda komórka LĄDOWA przyjmuje przynależność większości spośród: siebie
+    i swoich lądowych sąsiadów (NIEZIEMIA jest pełnoprawnym kandydatem).
+    Remis -> bez zmiany. Liczone wektorowo przez bincount na parach z CSR,
+    bez pętli po komórkach (patrz CLAUDE.md, zasada 2)."""
+    n = len(lad)
+    K = n_panstw + 1   # przesunięcie o +1: bincount nie lubi indeksów ujemnych
+    ii = np.repeat(np.arange(n), np.diff(indptr))
+    jj = indices
+    ll = lad[ii] & lad[jj]
+    ii, jj = ii[ll], jj[ll]
+
+    lad_idx = np.flatnonzero(lad)
+    # głosy: każdy lądowy sąsiad + jeden głos własny (self-loop)
+    cel_i = np.concatenate([ii, lad_idx])
+    cel_v = np.concatenate([kom_panstwo[jj] + 1, kom_panstwo[lad_idx] + 1])
+    flat = cel_i.astype(np.int64) * K + cel_v
+    liczba = np.bincount(flat, minlength=n * K).reshape(n, K)
+
+    maks = liczba.max(axis=1)
+    zwyciezca = liczba.argmax(axis=1) - 1
+    remis = (liczba == maks[:, None]).sum(axis=1) > 1
+
+    wynik = kom_panstwo.copy()
+    wynik[lad_idx] = np.where(remis[lad_idx], kom_panstwo[lad_idx], zwyciezca[lad_idx])
+    return wynik
+
+
+def _graf_ladowy_bez_ciesnin(lad, indptr, indices, zerwane_a, zerwane_b):
+    """Krawędzie sąsiedztwa ląd-ląd, z pominięciem zerwanych cieśnin — wyspa
+    oddzielona cieśniną nie jest sąsiadem lądu (patrz CLAUDE.md, zasada 5)."""
+    n = len(lad)
+    ii = np.repeat(np.arange(n), np.diff(indptr))
+    jj = indices
+    ok = lad[ii] & lad[jj]
+    ii, jj = ii[ok], jj[ok]
+    zerw = set(zip(zerwane_a.tolist(), zerwane_b.tolist()))
+    zerw |= set(zip(zerwane_b.tolist(), zerwane_a.tolist()))
+    zywe = np.array([(a, b) not in zerw for a, b in zip(ii.tolist(), jj.tolist())])
+    return ii[zywe], jj[zywe]
+
+
+def _wyczysc_spojnosc(kom_panstwo, ii_graf, jj_graf, n, panstwa_lista, prog_odprysku):
+    """Dla każdego państwa: spójne składowe jego komórek na grafie sąsiedztwa
+    (bez zerwanych cieśnin). Największa składowa = korpus, zostaje. Pozostałe
+    składowe < prog_odprysku wracają do ziemi niczyjej (szum "sól i pieprz"
+    na granicy); >= prog_odprysku to prawdziwe wyspy — zostają, trafiają do
+    logu."""
+    kom_panstwo = kom_panstwo.copy()
+    usuniete_total = 0
+    wyspy = []
+    for pid, nazwa in enumerate(panstwa_lista):
+        idx = np.flatnonzero(kom_panstwo == pid)
+        if len(idx) == 0:
+            continue
+        maska_e = (kom_panstwo[ii_graf] == pid) & (kom_panstwo[jj_graf] == pid)
+        a, b = ii_graf[maska_e], jj_graf[maska_e]
+        lokalny = -np.ones(n, dtype=np.int64)
+        lokalny[idx] = np.arange(len(idx))
+        mat = csr_matrix(
+            (np.ones(len(a)), (lokalny[a], lokalny[b])),
+            shape=(len(idx), len(idx)),
+        )
+        n_skladowych, etykiety = connected_components(mat, directed=False)
+        rozmiary = np.bincount(etykiety, minlength=n_skladowych)
+        najwieksza = int(rozmiary.argmax())
+        for sk in range(n_skladowych):
+            if sk == najwieksza:
+                continue
+            rozmiar = int(rozmiary[sk])
+            komorki_sk = idx[etykiety == sk]
+            if rozmiar < prog_odprysku:
+                kom_panstwo[komorki_sk] = NIEZIEMIA
+                usuniete_total += rozmiar
+            else:
+                wyspy.append((nazwa, rozmiar))
+    return kom_panstwo, usuniete_total, wyspy
+
+
 def main():
     d = np.load("world.npz")
     meta = json.load(open("world_meta.json"))
     lonlat = d["lonlat"]        # (N,2) — kanoniczna tożsamość geograficzna komórki
     punkty = d["punkty"]        # (N,2) — te same komórki, ale w pikselach "płótna"
     lad = d["lad"]
+    indptr, indices = d["indptr"], d["indices"]
+    zerwane_a, zerwane_b = d["zerwane_a"], d["zerwane_b"]
     n = len(lad)
 
     granice = json.load(open("kent_sussex.json"))
@@ -115,6 +205,45 @@ def main():
         maska &= lad                                             # tylko ląd
         kom_panstwo[maska] = id_panstwa[klucz]
         print(f"{PANSTWA[klucz]['nazwa_robocza']:<8} -> {int(maska.sum()):4d} komórek")
+
+    # --- 1b. CZYSZCZENIE NA GRAFIE SĄSIEDZTWA -------------------------------
+    # Punkt-w-poligonie testuje wyłącznie ŚRODEK komórki: przy komórkach rzędu
+    # 10 km i postrzępionym wybrzeżu środek nadwybrzeżnej komórki potrafi
+    # wpaść do poligonu, choć sama komórka jest odcięta od korpusu państwa
+    # wodą albo pasem ziemi niczyjej (eksklawa) — i odwrotnie, pojedyncza
+    # komórka niczyja potrafi zostać "dziurą" w środku państwa. Oba efekty to
+    # szum "sól i pieprz", nie decyzja polityczna, więc sprzątamy go PRZED
+    # podziałem na ziemie (żeby ziemie wyrastały z już czystej maski) — patrz
+    # brief 0003, część B.
+    panstwa_lista = list(PANSTWA.keys())
+    n_panstw = len(panstwa_lista)
+
+    print("\nFiltr większościowy (2 przebiegi):")
+    kom_panstwo_przed = kom_panstwo.copy()
+    for _ in range(2):
+        kom_panstwo = _filtr_wiekszosciowy(kom_panstwo, lad, indptr, indices, n_panstw)
+    zmienionych = int((kom_panstwo != kom_panstwo_przed).sum())
+    print(f"  zmienił przynależność {zmienionych} komórek")
+
+    print("\nTest spójności (ochrona wysp, próg odprysku = "
+          f"{PROG_ODPRYSKU} komórek):")
+    ii_graf, jj_graf = _graf_ladowy_bez_ciesnin(lad, indptr, indices, zerwane_a, zerwane_b)
+    kom_panstwo, usuniete, wyspy = _wyczysc_spojnosc(
+        kom_panstwo, ii_graf, jj_graf, n, panstwa_lista, PROG_ODPRYSKU)
+    if usuniete:
+        print(f"  usunięto {usuniete} komórek odprysków (wróciły do ziemi niczyjej)")
+    else:
+        print("  brak odprysków do usunięcia")
+    if wyspy:
+        for nazwa, rozmiar in wyspy:
+            print(f"  wyspa państwa {PANSTWA[nazwa]['nazwa_robocza']}: {rozmiar} komórek")
+    else:
+        print("  brak wysp >= progu odprysku")
+
+    for klucz in panstwa_lista:
+        pid = id_panstwa[klucz]
+        print(f"  {PANSTWA[klucz]['nazwa_robocza']:<8} po czyszczeniu -> "
+              f"{int((kom_panstwo == pid).sum()):4d} komórek")
 
     # --- 2. ZIEMIE: każda komórka trafia do najbliższego ośrodka SWOJEGO państwa
     # (poligony Thiessena wewnątrz granicy państwa = strefy ciążenia do grodów)
