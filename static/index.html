@@ -237,28 +237,58 @@ wypalWladcow();
    =========================================================================== */
 const cv = document.getElementById("mapa");
 const scena = document.getElementById("scena");
-let kam = null, widok = "wladcy", hoverCel = -1, przeciag = null;
+let kam = { s: 1, tx: 0, ty: 0, min: 0.1, max: 10 };
+let widok = "wladcy", hoverCel = -1;
 
-function dopasujKamere() {
-  // Scenariusz: kamera startuje na bboxie obu państw (kadr_startowy, liczony
-  // w scenariusz_800.py z geografii komórek) — gracz nie szuka Kentu na
-  // mapie całej Europy. Bez scenariusza: dopasowanie do całego płótna, jak
-  // dawniej.
+// Próg przeciągania: pointerdown NIE zaczyna panoramowania od razu — dopiero
+// gdy kursor odjedzie o PROG_PX od miejsca wciśnięcia. Bez tego drżenie ręki
+// przy zwykłym (albo podwójnym) kliku o 1-2 px potrafiło "pociągnąć" mapę.
+let nacisk = null;         // {x,y} — gdzie wciśnięto (do liczenia progu)
+let poprzednia = null;     // {x,y} — ostatnia pozycja (baza panoramowania)
+let przeciagam = false;    // czy próg już przekroczony
+const PROG_PX = 4;
+
+// Batching rysowania: seria zdarzeń (wheel, pointermove) potrafi wywołać
+// rysuj() dziesiątki razy między klatkami, a rysuj() obrysowuje ~180 tys.
+// odcinków granic przy oddaleniu na całą Europę — przeglądarka się dławi.
+// Zamiast rysować od razu, planujemy najwyżej jedno przerysowanie na klatkę.
+let czekaNaKlatke = false;
+function zaplanujRysowanie() {
+  if (czekaNaKlatke) return;
+  czekaNaKlatke = true;
+  requestAnimationFrame(() => { czekaNaKlatke = false; rysuj(); });
+}
+
+// Limity zoomu liczone ZAWSZE od skali "cała mapa mieści się w oknie" — nie
+// od startowego kadru scenariusza (kadr Kentu i Sussexu to zaledwie kilkadziesiąt
+// px płótna; gdyby to on wyznaczał minimum, nie dałoby się oddalić do Europy).
+let skalaCalosc = 1;
+function ustawLimity() {
+  skalaCalosc = Math.min(scena.clientWidth / W, scena.clientHeight / H);
+  kam.min = skalaCalosc * 0.9;    // cała Europa mieści się z zapasem
+  kam.max = skalaCalosc * 120;    // zejście do pojedynczych komórek w Kencie
+}
+
+// Widok startowy: bbox obu państw scenariusza (kadr_startowy, policzony w
+// scenariusz_800.py), a bez scenariusza — cała mapa, jak dawniej. Osobna
+// funkcja od ustawLimity(), żeby resize NIE odrzucał gracza z powrotem do
+// kadru startowego (tylko przelicza limity zoomu, kamera zostaje, gdzie była).
+function ustawWidokStartowy() {
   if (TRYB_SCENARIUSZA && meta.kadr_startowy) {
     const { x0, y0, x1, y1 } = meta.kadr_startowy;
     const bw = x1 - x0, bh = y1 - y0;
     const s = Math.min(scena.clientWidth / bw, scena.clientHeight / bh);
-    kam = {
-      s,
-      tx: (scena.clientWidth - bw * s) / 2 - x0 * s,
-      ty: (scena.clientHeight - bh * s) / 2 - y0 * s,
-      fit: s,
-    };
+    kam.s = s;
+    kam.tx = (scena.clientWidth - bw * s) / 2 - x0 * s;
+    kam.ty = (scena.clientHeight - bh * s) / 2 - y0 * s;
   } else {
-    const s = Math.min(scena.clientWidth / W, scena.clientHeight / H);
-    kam = { s, tx: (scena.clientWidth - W*s)/2, ty: (scena.clientHeight - H*s)/2, fit: s };
+    kam.s = skalaCalosc;
+    kam.tx = (scena.clientWidth - W * skalaCalosc) / 2;
+    kam.ty = (scena.clientHeight - H * skalaCalosc) / 2;
   }
 }
+function resetWidok() { ustawWidokStartowy(); zaplanujRysowanie(); }
+
 function rysuj() {
   const dpr = window.devicePixelRatio || 1;
   if (cv.width !== scena.clientWidth * dpr) {
@@ -294,9 +324,13 @@ function rysuj() {
   // tak, jak zoom rośnie, więc na ekranie kreska ma zawsze tyle samo pikseli
   // (tak robią wszystkie mapy internetowe).
   g.lineJoin = g.lineCap = "round";
-  g.strokeStyle = "rgba(20,16,10,.4)"; g.lineWidth = 0.7 / kam.s; g.stroke(grJednostka);
-  g.strokeStyle = "#1d1912";           g.lineWidth = 2.6 / kam.s; g.stroke(grWlasciciel);
-  g.strokeStyle = "#171d24";           g.lineWidth = 1.9 / kam.s; g.stroke(grBrzeg);
+  // przy mocnym oddaleniu granica jednostek (najgęstszy Path2D, ~180 tys.
+  // odcinków) jest i tak niewidoczna — pomijamy ją, żeby zoom nie dławił
+  if (kam.s >= kam.min * 3) {
+    g.strokeStyle = "rgba(20,16,10,.4)"; g.lineWidth = 0.7 / kam.s; g.stroke(grJednostka);
+  }
+  g.strokeStyle = "#1d1912"; g.lineWidth = 2.6 / kam.s; g.stroke(grWlasciciel);
+  g.strokeStyle = "#171d24"; g.lineWidth = 1.9 / kam.s; g.stroke(grBrzeg);
 
   // podświetlenie jednostki (albo ziemi niczyjej) pod kursorem
   if (hoverCel >= 0 && lad[hoverCel]) {
@@ -305,8 +339,25 @@ function rysuj() {
     g.fill(j >= 0 ? sciezkaJednostki[j] : sciezkaNiczyje);
   }
 }
-dopasujKamere(); rysuj();
-window.addEventListener("resize", () => { dopasujKamere(); rysuj(); });
+ustawLimity(); ustawWidokStartowy(); rysuj();
+window.addEventListener("resize", () => {
+  ustawLimity();
+  kam.s = Math.min(kam.max, Math.max(kam.min, kam.s));   // reszta (tx/ty) zostaje — resize nie wyrzuca z widoku
+  zaplanujRysowanie();
+});
+window.addEventListener("keydown", ev => {
+  if (ev.key === "Home") { ev.preventDefault(); resetWidok(); }
+});
+// "podwójny klik prawym" nie istnieje jako natywne zdarzenie — prawy klik
+// zawsze budzi "contextmenu", więc dwa takie zdarzenia blisko w czasie to
+// jego odpowiednik. Menu kontekstowe i tak tłumimy (mapa nie ma swojego).
+let ostatniPrawy = 0;
+cv.addEventListener("contextmenu", ev => {
+  ev.preventDefault();
+  const teraz = performance.now();
+  if (teraz - ostatniPrawy < 400) resetWidok();
+  ostatniPrawy = teraz;
+});
 
 /* ===========================================================================
    5. INTERAKCJA: hover, pan, zoom, podbój
@@ -317,10 +368,15 @@ function naSwiat(ev) {
           (ev.clientY - r.top  - kam.ty) / kam.s];
 }
 cv.addEventListener("pointermove", ev => {
-  if (przeciag) {
-    kam.tx += ev.clientX - przeciag.x; kam.ty += ev.clientY - przeciag.y;
-    przeciag = { x: ev.clientX, y: ev.clientY };
-    rysuj(); return;
+  if (nacisk && !przeciagam) {
+    const dx = ev.clientX - nacisk.x, dy = ev.clientY - nacisk.y;
+    if (dx*dx + dy*dy > PROG_PX*PROG_PX) przeciagam = true;
+  }
+  if (przeciagam) {
+    kam.tx += ev.clientX - poprzednia.x; kam.ty += ev.clientY - poprzednia.y;
+    poprzednia = { x: ev.clientX, y: ev.clientY };
+    zaplanujRysowanie();
+    return;
   }
   const [x, y] = naSwiat(ev);
   let nowy = -1;
@@ -328,18 +384,20 @@ cv.addEventListener("pointermove", ev => {
     const c = delaunay.find(x, y);      // najbliższa komórka: superszybkie
     if (lad[c]) nowy = c;
   }
-  if (nowy !== hoverCel) { hoverCel = nowy; odswiezInfo(); rysuj(); }
+  if (nowy !== hoverCel) { hoverCel = nowy; odswiezInfo(); zaplanujRysowanie(); }
 });
 cv.addEventListener("pointerdown", ev => {
-  przeciag = { x: ev.clientX, y: ev.clientY };
+  nacisk = { x: ev.clientX, y: ev.clientY };
+  poprzednia = { x: ev.clientX, y: ev.clientY };
+  przeciagam = false;
   cv.setPointerCapture(ev.pointerId);
 });
 cv.addEventListener("pointerup", ev => {
-  przeciag = null;
+  // Kliknięcie = wciśnięcie i puszczenie BEZ przekroczenia progu przeciągania.
   // Shift+klik = podbój jednostki dla wybranego właściciela.
   // Zauważ: klient NICZEGO nie zmienia sam — wysyła rozkaz, a prawda
   // wraca z serwera (wiadomość "zmiana"). Jedno źródło prawdy = zero rozjazdów.
-  if (ev.shiftKey && hoverCel >= 0) {
+  if (!przeciagam && ev.shiftKey && hoverCel >= 0) {
     const j = komJednostka[hoverCel];
     if (TRYB_SCENARIUSZA) {
       ws.send(JSON.stringify({ typ: "podboj", ziemia: j, panstwo: mojWlasciciel() }));
@@ -347,17 +405,27 @@ cv.addEventListener("pointerup", ev => {
       ws.send(JSON.stringify({ typ: "podboj", powiat: j, krolestwo: mojWlasciciel() }));
     }
   }
+  nacisk = null; poprzednia = null; przeciagam = false;
 });
-cv.addEventListener("pointerleave", () => { przeciag = null; hoverCel = -1; odswiezInfo(); rysuj(); });
+cv.addEventListener("pointerleave", () => {
+  nacisk = null; poprzednia = null; przeciagam = false;
+  hoverCel = -1; odswiezInfo(); zaplanujRysowanie();
+});
 cv.addEventListener("wheel", ev => {
   ev.preventDefault();
   const r = cv.getBoundingClientRect();
   const mx = ev.clientX - r.left, my = ev.clientY - r.top;
-  const f = ev.deltaY < 0 ? 1.15 : 1/1.15;
-  const ns = Math.min(kam.fit * 20, Math.max(kam.fit * 0.6, kam.s * f));
+  // Krok proporcjonalny do przewinięcia (nie sztywne 15%) — gładzik sypie
+  // seriami drobnych zdarzeń, mysz z kółkiem wysokiej rozdzielczości podobnie;
+  // bez tego zoom skacze zamiast płynąć. deltaMode normalizuje jednostki
+  // (0 = piksele, 1 = linie, 2 = strony — różne urządzenia/przeglądarki).
+  const jednostka = ev.deltaMode === 1 ? 16 : ev.deltaMode === 2 ? 100 : 1;
+  const f = Math.exp(-ev.deltaY * jednostka * 0.0015);
+  const ns = Math.min(kam.max, Math.max(kam.min, kam.s * f));
   const k = ns / kam.s;
+  // punkt kotwiczenia = kursor — zostaje pod myszą niezależnie od zoomu
   kam.tx = mx - (mx - kam.tx) * k; kam.ty = my - (my - kam.ty) * k; kam.s = ns;
-  rysuj();
+  zaplanujRysowanie();
 }, { passive: false });
 
 /* ===========================================================================
@@ -383,6 +451,10 @@ ws.onmessage = ev => {
   } else if (m.co === "zmiana" && m.typ === "podatek") {
     podatki[m.panstwo] = m.stawka;
     if (m.panstwo === mojWlasciciel()) synchronizujSuwak();
+  } else if (m.co === "zmiana" && m.typ === "odmowa") {
+    // Odrzucony rozkaz (np. podbój ziemi niczyjej) NIE ginie po cichu —
+    // gracz musi wiedzieć, że kliknął źle, a nie że coś się zepsuło.
+    pokazKomunikat(m.powod || "Rozkaz odrzucony.");
   }
 };
 
@@ -424,11 +496,27 @@ suwak.oninput = () => {
 };
 synchronizujSuwak();
 
+// Komunikat tymczasowy (np. odmowa podboju) przykrywa panel info na chwilę,
+// niezależnie od tego, co akurat pokazuje hover — potem wraca normalny widok.
+let komunikat = null;   // {tekst, doCzasu}
+function pokazKomunikat(tekst, ms = 3000) {
+  komunikat = { tekst, doCzasu: performance.now() + ms };
+  odswiezInfo();
+  setTimeout(() => {
+    if (komunikat && performance.now() >= komunikat.doCzasu) { komunikat = null; odswiezInfo(); }
+  }, ms + 20);
+}
+
 function odswiezInfo() {
+  if (komunikat && performance.now() < komunikat.doCzasu) {
+    info.innerHTML = `<b style="color:#e07050">${komunikat.tekst}</b>`;
+    return;
+  }
   if (hoverCel < 0) {
-    info.innerHTML = `<span class="szary">Najedź na obszar. Kółko = zoom,
-      przeciągnij = przesuń.<br><b>Shift+klik</b> = podbój dla
-      wybranego państwa.</span>`;
+    info.innerHTML = `<span class="szary">Najedź na obszar. Kółko/gest = zoom,
+      przeciągnij = przesuń.<br><b>Shift+klik</b> = podbój ziemi OBCEGO
+      państwa dla wybranego państwa.<br><b>Home</b> albo podwójny prawy klik
+      = powrót do widoku startowego.</span>`;
     return;
   }
   const j = komJednostka[hoverCel];

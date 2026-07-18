@@ -238,9 +238,16 @@ class Swiat:
                 if z is None or p is None:
                     return None
                 z, p = int(z), int(p)
-                # Ziemia niczyja (poza zakresem — nie ma takiego indeksu w
-                # ziemia_panstwo) nie jest jeszcze zdobywalna: zajmowanie
-                # pustki to osobna, późniejsza mechanika.
+                # Ziemia niczyja (klient wysyła -1 — tyle warta jest tam
+                # "jednostka") nie jest jeszcze zdobywalna: zajmowanie pustki
+                # to osobna, późniejsza mechanika. Rozkaz NIE ma ginąć po
+                # cichu — gracz ma dostać wprost informację, że to odmowa,
+                # nie usterka.
+                if z < 0:
+                    return {
+                        "typ": "odmowa",
+                        "powod": "ziemi niczyjej nie można podbić — to osobna mechanika",
+                    }
                 if not (0 <= z < self.n_ziem and 0 <= p < self.n_panstw):
                     return None
                 self.ziemia_panstwo[z] = p
