@@ -12,11 +12,13 @@ materiał do nauki — **kod ma być obficie komentowany po polsku, poziom
 ```
 generate_world.py  → world.npz + world_meta.json   (jednorazowa budowa świata)
 scenariusz_800.py  → scenariusz_800.json            (warstwa historyczna: Kent i Sussex, rok 800)
+korekty.py         → (bez własnego pliku wynikowego) (rozstrzyganie korekt.json na bieżącą siatkę)
+korekty.json       → (ręcznie tworzony, COMMITOWANY) (poprawki edytora świata, zakotwiczone w lon/lat)
 sim.py             → klasa Swiat                    (czysta symulacja NumPy)
-server.py          → FastAPI + WebSocket            (pętla ticków, rozgłaszanie)
-static/index.html  → klient canvas                  (Woronoj odtwarzany z punktów)
+server.py          → FastAPI + WebSocket            (pętla ticków, rozgłaszanie, /api/korekty)
+static/index.html  → klient canvas                  (Woronoj odtwarzany z punktów; ?edytor=1 = edytor świata)
 test_ciesnin.py    → niezmienniki świata            (uruchamiać po każdej regeneracji)
-test_scenariusz.py → niezmienniki scenariusza       (uruchamiać po zmianie scenariusz_800.py/sim.py)
+test_scenariusz.py → niezmienniki scenariusza       (uruchamiać po zmianie scenariusz_800.py/sim.py/korekty.json)
 ```
 
 ## Zasady fundamentalne
@@ -110,6 +112,35 @@ test_scenariusz.py → niezmienniki scenariusza       (uruchamiać po zmianie sc
 - `scenariusz_800.json` (jak `world.npz`/`world_meta.json`) to artefakt
   generatora — nie commitujemy, trzymać w `.gitignore`.
 
+## Korekty ręczne i edytor
+
+**Automat robi masę, ręka robi przypadki jednostkowe; edytor nie zmienia
+świata, tylko listę korekt zakotwiczonych w lon/lat; komórka tknięta ręcznie
+jest przypięta i automatyczne czyszczenie jej nie rusza.**
+
+- Czyszczenie granic na grafie sąsiedztwa (poprzedni punkt, brief 0003)
+  działa dobrze dla masy, ale przegrywa z pojedynczymi, nazwanymi przypadkami
+  (mała wyspa tuż pod progiem odprysku, sierota na granicy) — to nie klasa
+  problemów do złapania regułą, tylko lista miejsc do ręcznego rozstrzygnięcia.
+  Stąd `korekty.json` (format i przykłady w `korekty.py`/briefie 0004) +
+  tryb edytora w `static/index.html` (`?edytor=1`).
+- `korekty.json` **jest commitowany** (w przeciwieństwie do `world.npz`,
+  `world_meta.json`, `scenariusz_800.json`) — to ręczna praca autora, nie
+  odtwarzalny artefakt generatora. Kopia zapasowa `korekty.json.bak`
+  (tworzona przy każdym zapisie z edytora) już nie — ta zostaje w `.gitignore`.
+- Korekty nakładają się **przy wczytywaniu świata w `sim.py`** (`Swiat.__init__`),
+  nie w generatorach — restart serwera (sekundy) wystarcza, regeneracja
+  świata (minuty) nie jest potrzebna. Kolejność: `world.npz` → korekty
+  `lad` → korekty krawędzi (cieśniny) → scenariusz → korekty
+  `panstwo`/`ziemia` → oznaczenie komórek dotkniętych jako `przypięte`.
+- `scenariusz_800.py` (który buduje `scenariusz_800.json` z point-in-polygon
+  + automatyczne czyszczenie granic) omija komórki przypięte — inaczej
+  automat w kółko kasowałby to, co edytor w kółko by przywracał.
+- Edytor to narzędzie AUTORSKIE, nie mechanika gry: podgląd w przeglądarce
+  jest natychmiastowy (klient sam przelicza ląd/przynależność i przebudowuje
+  diagram Woronoja), ale symulacja poznaje zmianę dopiero po restarcie
+  serwera — nie ma potrzeby przeładowywać stanu na żywo w trakcie edycji.
+
 ## Pomysły zaakceptowane kierunkowo (do dyskusji przed implementacją)
 
 - Ziarna powiatów z prawdziwych miast (Natural Earth `populated_places` +
@@ -176,6 +207,11 @@ są w grafie sąsiedztwa sąsiadami. Potem wrócić do mechanik.
 - Po każdej zmianie generatora: `python generate_world.py && python test_ciesnin.py`.
 - Po każdej zmianie scenariusza: `python scenariusz_800.py && python test_scenariusz.py`
   (wymaga świeżo wygenerowanego `world.npz`).
+- Po każdej zmianie `korekty.json` (ręcznie albo przez edytor + Zapisz):
+  restart serwera pokazuje efekt od razu w grze; jeśli korekta dotyczy
+  przynależności/granic scenariusza, odpal też `python scenariusz_800.py &&
+  python test_scenariusz.py`, żeby przeliczyć czyszczenie granic z nowym
+  zestawem przypiętych komórek.
 - Nowe niezmienniki świata dopisywać do `test_ciesnin.py`, niezmienniki
   scenariusza do `test_scenariusz.py` (lub siostrzanych plików testowych) —
   mapa/scenariusz, który nie przechodzi testów, nie wchodzi do gry.

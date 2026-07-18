@@ -10,6 +10,7 @@ Wymaga wygenerowanego świata i scenariusza:
 """
 
 import json
+import pathlib
 import numpy as np
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
@@ -151,6 +152,69 @@ sprawdz(
     "podbój ziemi niczyjej (ziemia=-1) zwraca jawną odmowę",
     isinstance(wynik_podboju, dict) and wynik_podboju.get("typ") == "odmowa",
 )
+
+# ----------------------------------------------------------------------------
+# 7. KOREKTY RĘCZNE (edytor świata, zadanie 0004) — to, co ręcznie ustawione,
+# musi faktycznie obowiązywać po wczytaniu Swiat(). Dwie części:
+#   a) syntetyczny plik korekt (zawsze uruchamiany — nie zależy od tego, czy
+#      ktoś już czegoś poprawił ręcznie w TYM repo) sprawdza sam MECHANIZM;
+#   b) jeśli w repo istnieje PRAWDZIWY korekty.json, jego wpisy też muszą się
+#      odzwierciedlić w stanie zwykłego Swiat() — to dodatkowa siatka
+#      bezpieczeństwa nad ręczną pracą autora.
+# ----------------------------------------------------------------------------
+plik_korekt_tmp = "korekty_test_tmp.json"
+try:
+    # komórka morska -> ma zostać lądem; komórka lądowa niczyja -> ma trafić
+    # do Kentu/Dover (dokładnie przypadek "przypięcia" Sheppey z briefu 0004).
+    idx_morska = int(np.flatnonzero(~lad)[0])
+    ziemia_kent = next(z for z in ziemie if z["panstwo"] == "kent")
+    idx_niczyje = int(np.flatnonzero(lad & (kom_panstwo < 0))[0])
+
+    json.dump({
+        "wersja": 1,
+        "komorki": [
+            {"lonlat": d["lonlat"][idx_morska].tolist(), "lad": True, "notatka": "test"},
+            {"lonlat": d["lonlat"][idx_niczyje].tolist(),
+             "panstwo": "kent", "ziemia": ziemia_kent["nazwa_robocza"], "notatka": "test"},
+        ],
+        "krawedzie": [],
+    }, open(plik_korekt_tmp, "w"), ensure_ascii=False)
+
+    s2 = Swiat(plik_korekt=plik_korekt_tmp)
+    sprawdz(
+        "korekta 'lad' na syntetycznym pliku: komórka morska staje się lądem",
+        bool(s2.lad[idx_morska]),
+    )
+    id_kent = next(i for i, p in enumerate(s2.panstwa) if p["klucz"] == "kent")
+    sprawdz(
+        "korekta 'panstwo'/'ziemia' na syntetycznym pliku: komórka niczyja trafia do Kentu",
+        int(s2.wlasciciel_komorki[idx_niczyje]) == id_kent,
+    )
+    sprawdz(
+        "komórki dotknięte syntetycznym plikiem korekt są oznaczone jako przypięte",
+        bool(s2.przypiete[idx_morska]) and bool(s2.przypiete[idx_niczyje]),
+    )
+finally:
+    pathlib.Path(plik_korekt_tmp).unlink(missing_ok=True)
+
+if pathlib.Path("korekty.json").exists():
+    prawdziwe = json.load(open("korekty.json", encoding="utf-8"))
+    s3 = Swiat()
+    from korekty import rozstrzygnij_komorki
+    for idx, wpis in rozstrzygnij_komorki(prawdziwe, s3.lonlat):
+        if "lad" in wpis:
+            sprawdz(
+                f"korekty.json: komórka {idx} ma lad={wpis['lad']} po wczytaniu",
+                bool(s3.lad[idx]) == bool(wpis["lad"]),
+            )
+        if "panstwo" in wpis and wpis["panstwo"] is not None:
+            id_p = next((i for i, p in enumerate(s3.panstwa) if p["klucz"] == wpis["panstwo"]), None)
+            sprawdz(
+                f"korekty.json: komórka {idx} należy do państwa '{wpis['panstwo']}' po wczytaniu",
+                id_p is not None and int(s3.wlasciciel_komorki[idx]) == id_p,
+            )
+else:
+    print("(korekty.json nie istnieje w repo — pominięto sprawdzenie realnego pliku)")
 
 print()
 print("WYNIK:", "wszystkie niezmienniki scenariusza OK" if OK else "SĄ BŁĘDY!")

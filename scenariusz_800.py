@@ -31,6 +31,8 @@ from matplotlib.path import Path
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 
+import korekty as korekty_mod
+
 NIEZIEMIA = -1          # brak właściciela / brak ziemi
 
 # Próg odprysku (test spójności, część B2 briefu 0003): spójna składowa
@@ -98,11 +100,15 @@ PANSTWA = {
 }
 
 
-def _filtr_wiekszosciowy(kom_panstwo, lad, indptr, indices, n_panstw):
+def _filtr_wiekszosciowy(kom_panstwo, lad, indptr, indices, n_panstw, przypiete=None):
     """Każda komórka LĄDOWA przyjmuje przynależność większości spośród: siebie
     i swoich lądowych sąsiadów (NIEZIEMIA jest pełnoprawnym kandydatem).
     Remis -> bez zmiany. Liczone wektorowo przez bincount na parach z CSR,
-    bez pętli po komórkach (patrz CLAUDE.md, zasada 2)."""
+    bez pętli po komórkach (patrz CLAUDE.md, zasada 2).
+
+    `przypiete` (edytor świata, brief 0004): komórki dotknięte ręcznie w
+    korekty.json NIE głosują wynikiem — zostają dokładnie tym, czym są,
+    inaczej automat w kółko kasowałby ręczną poprawkę."""
     n = len(lad)
     K = n_panstw + 1   # przesunięcie o +1: bincount nie lubi indeksów ujemnych
     ii = np.repeat(np.arange(n), np.diff(indptr))
@@ -123,6 +129,8 @@ def _filtr_wiekszosciowy(kom_panstwo, lad, indptr, indices, n_panstw):
 
     wynik = kom_panstwo.copy()
     wynik[lad_idx] = np.where(remis[lad_idx], kom_panstwo[lad_idx], zwyciezca[lad_idx])
+    if przypiete is not None:
+        wynik[przypiete] = kom_panstwo[przypiete]
     return wynik
 
 
@@ -140,12 +148,20 @@ def _graf_ladowy_bez_ciesnin(lad, indptr, indices, zerwane_a, zerwane_b):
     return ii[zywe], jj[zywe]
 
 
-def _wyczysc_spojnosc(kom_panstwo, ii_graf, jj_graf, n, panstwa_lista, prog_odprysku):
+def _wyczysc_spojnosc(kom_panstwo, ii_graf, jj_graf, n, panstwa_lista, prog_odprysku,
+                       przypiete=None):
     """Dla każdego państwa: spójne składowe jego komórek na grafie sąsiedztwa
     (bez zerwanych cieśnin). Największa składowa = korpus, zostaje. Pozostałe
     składowe < prog_odprysku wracają do ziemi niczyjej (szum "sól i pieprz"
     na granicy); >= prog_odprysku to prawdziwe wyspy — zostają, trafiają do
-    logu."""
+    logu.
+
+    `przypiete` (edytor świata, brief 0004): składowa, w której siedzi choć
+    jedna komórka dotknięta ręcznie w korekty.json, NIGDY nie wraca do ziemi
+    niczyjej — to dokładnie przypadek Sheppey: 2-3 komórki, które bez tego
+    automat kasowałby w kółko, ilekroć ktoś by go uruchomił ponownie."""
+    if przypiete is None:
+        przypiete = np.zeros(n, dtype=bool)
     kom_panstwo = kom_panstwo.copy()
     usuniete_total = 0
     wyspy = []
@@ -169,7 +185,9 @@ def _wyczysc_spojnosc(kom_panstwo, ii_graf, jj_graf, n, panstwa_lista, prog_odpr
                 continue
             rozmiar = int(rozmiary[sk])
             komorki_sk = idx[etykiety == sk]
-            if rozmiar < prog_odprysku:
+            if przypiete[komorki_sk].any():
+                wyspy.append((nazwa, rozmiar))
+            elif rozmiar < prog_odprysku:
                 kom_panstwo[komorki_sk] = NIEZIEMIA
                 usuniete_total += rozmiar
             else:
@@ -188,6 +206,17 @@ def main():
     n = len(lad)
 
     granice = json.load(open("kent_sussex.json"))
+
+    # Komórki dotknięte ręcznie w edytorze (korekty.json, jeśli istnieje) —
+    # automatyczne czyszczenie granic niżej ma je omijać (brief 0004:
+    # "automat robi masę, ręka robi przypadki jednostkowe").
+    korekty = korekty_mod.wczytaj()
+    przypiete = np.zeros(n, dtype=bool)
+    for idx in korekty_mod.komorki_przypiete(korekty, lonlat):
+        przypiete[idx] = True
+    if przypiete.any():
+        print(f"Korekty ręczne: {int(przypiete.sum())} komórek przypiętych "
+              f"(czyszczenie granic je pominie)")
 
     # --- 1. KTÓRE KOMÓRKI NALEŻĄ DO KTÓREGO PAŃSTWA ------------------------
     # Test punkt-w-poligonie dla WSZYSTKICH komórek naraz (matplotlib.path).
@@ -221,7 +250,8 @@ def main():
     print("\nFiltr większościowy (2 przebiegi):")
     kom_panstwo_przed = kom_panstwo.copy()
     for _ in range(2):
-        kom_panstwo = _filtr_wiekszosciowy(kom_panstwo, lad, indptr, indices, n_panstw)
+        kom_panstwo = _filtr_wiekszosciowy(
+            kom_panstwo, lad, indptr, indices, n_panstw, przypiete=przypiete)
     zmienionych = int((kom_panstwo != kom_panstwo_przed).sum())
     print(f"  zmienił przynależność {zmienionych} komórek")
 
@@ -229,7 +259,7 @@ def main():
           f"{PROG_ODPRYSKU} komórek):")
     ii_graf, jj_graf = _graf_ladowy_bez_ciesnin(lad, indptr, indices, zerwane_a, zerwane_b)
     kom_panstwo, usuniete, wyspy = _wyczysc_spojnosc(
-        kom_panstwo, ii_graf, jj_graf, n, panstwa_lista, PROG_ODPRYSKU)
+        kom_panstwo, ii_graf, jj_graf, n, panstwa_lista, PROG_ODPRYSKU, przypiete=przypiete)
     if usuniete:
         print(f"  usunięto {usuniete} komórek odprysków (wróciły do ziemi niczyjej)")
     else:

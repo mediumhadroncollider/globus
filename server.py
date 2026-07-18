@@ -20,10 +20,11 @@ import asyncio
 import json
 
 import numpy as np
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response, FileResponse
 from fastapi.staticfiles import StaticFiles
 
+import korekty as korekty_mod
 from sim import Swiat
 
 # --- na starcie serwera: załaduj świat; jeśli go nie ma — wygeneruj ---------
@@ -48,6 +49,10 @@ def meta():
     m["kom_ziemia"] = None   # to samo — kom_ziemia jedzie w /api/dane, nie tutaj
     m["podatki"] = swiat.podatek.tolist()
     m["tryb_scenariusza"] = swiat.tryb_scenariusza
+    # "zerwane" z world_meta.json to tylko cieśniny PROCEDURALNE (z generate_world.py).
+    # swiat.zerwane_a/b ma dodatkowo cieśniny dopisane ręcznie w edytorze (korekty.json)
+    # — klient ma rysować/traktować jako wybrzeże JEDNO i drugie, więc podmieniamy.
+    m["zerwane"] = np.stack([swiat.zerwane_a, swiat.zerwane_b], axis=1).tolist()
 
     if swiat.tryb_scenariusza:
         # Warstwa scenariusza: ZIEMIE i PAŃSTWA zamiast powiatów/królestw.
@@ -80,27 +85,81 @@ def dane():
     binarnie przeglądarka dostaje je 'gotowe do użycia': opakuje bufor
     w Float32Array/Int32Array bez żadnego kopiowania. Kolejność i typy
     muszą się zgadzać po obu stronach — to nasz mini-protokół:
-        punkty     float32 × N×2   (bajty 0    … 8N)
-        kom_pow    int32   × N     (8N   … 12N)
-        kom_ziemia int32   × N     (12N  … 16N)
-        zyznosc    float32 × N     (16N  … 20N)
-        lad        uint8   × N     (20N  … 21N)
+        punkty     float32 × N×2
+        lonlat     float32 × N×2   (tożsamość geograficzna — edytor świata)
+        kom_pow    int32   × N
+        kom_ziemia int32   × N
+        zyznosc    float32 × N
+        lad        uint8   × N     (na samym końcu!)
     Uwaga-pułapka: tablica uint8 stoi CELOWO na końcu. Typy 4-bajtowe
     (Int32Array, Float32Array) można nałożyć na bufor tylko pod adresem
     podzielnym przez 4 — gdyby bajty lądu stały w środku, wszystko za nimi
     byłoby przesunięte o N bajtów i przeglądarka rzuciłaby błędem wyrównania.
     kom_ziemia jest ZAWSZE w tym bloku (tryb proceduralny wysyła samo -1) —
     protokół binarny jednakowy w obu trybach, żeby klient nie musiał się
-    rozgałęziać przy parsowaniu.
+    rozgałęziać przy parsowaniu. lonlat jedzie ZAWSZE (nawet poza edytorem) —
+    to jedna, spójna kopia danych; edytor po prostu jej używa, a zwykła
+    rozgrywka po prostu ją ignoruje.
     """
     czesci = [
         swiat.punkty.astype("<f4").tobytes(),
+        swiat.lonlat.astype("<f4").tobytes(),
         swiat.komorka_pow.astype("<i4").tobytes(),
         swiat.kom_ziemia.astype("<i4").tobytes(),
         swiat.zyznosc.astype("<f4").tobytes(),
         swiat.lad.astype(np.uint8).tobytes(),
     ]
     return Response(content=b"".join(czesci), media_type="application/octet-stream")
+
+# ----------------------------------------------------------------------------
+# KOREKTY RĘCZNE (edytor świata) — patrz korekty.py i CLAUDE.md, sekcja
+# "Korekty ręczne i edytor". Dostępne zawsze, bez uprawnień: projekt lokalny,
+# hobbystyczny (brief 0004 wprost tego chce — nie ma kogo tu chronić).
+# ----------------------------------------------------------------------------
+@app.get("/api/korekty")
+def api_korekty_get():
+    """Zwraca plik korekt (albo pustą strukturę), wzbogacony o rozstrzygnięcia
+    na BIEŻĄCĄ siatkę — klient-edytor dostaje gotowe indeksy komórek/krawędzi
+    (żeby nie musiał sam szukać najbliższej komórki po lon/lat) oraz stan
+    SPRZED korekt (do dokładnego cofnięcia "gumką" korekty wczytanej z
+    poprzedniej sesji, bez zgadywania). Kolejność list "_bazowe"/"_krawedzie_idx"
+    odpowiada 1:1 kolejności "komorki"/"krawedzie" w pliku."""
+    dane_korekt = korekty_mod.wczytaj()
+
+    bazowe = []
+    for idx, _ in korekty_mod.rozstrzygnij_komorki(dane_korekt, swiat.lonlat):
+        bazowe.append({
+            "idx": idx,
+            "lad": bool(swiat.lad_bazowe[idx]),
+            "panstwo": (
+                swiat.panstwa[int(swiat.kom_panstwo_bazowe[idx])]["klucz"]
+                if swiat.tryb_scenariusza and swiat.kom_panstwo_bazowe[idx] >= 0
+                else None
+            ),
+            "ziemia": (
+                swiat.ziemie[int(swiat.kom_ziemia_bazowa[idx])]["nazwa_robocza"]
+                if swiat.kom_ziemia_bazowa[idx] >= 0
+                else None
+            ),
+        })
+    dane_korekt["_bazowe"] = bazowe
+
+    dane_korekt["_krawedzie_idx"] = [
+        [ia, ib] for ia, ib, _ in korekty_mod.rozstrzygnij_krawedzie(dane_korekt, swiat.lonlat)
+    ]
+    return dane_korekt
+
+@app.post("/api/korekty")
+async def api_korekty_post(zadanie: Request):
+    """Zapisuje CAŁĄ listę korekt przysłaną przez edytor (nadpisanie, nie
+    doklejanie — klient trzyma pełny stan). Kopia .bak PRZED nadpisaniem:
+    praca ręczna jest cenna, nie wolno jej stracić na błędzie."""
+    dane_korekt = await zadanie.json()
+    dane_korekt.setdefault("wersja", 1)
+    dane_korekt.setdefault("komorki", [])
+    dane_korekt.setdefault("krawedzie", [])
+    korekty_mod.zapisz(dane_korekt)
+    return {"zapisano": len(dane_korekt["komorki"]) + len(dane_korekt["krawedzie"])}
 
 # ----------------------------------------------------------------------------
 # WEBSOCKET: rozgłaszanie ticków i przyjmowanie rozkazów

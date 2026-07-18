@@ -4,5 +4,12 @@
 /world_meta.json
 /scenariusz_800.json
 
+# korekty.json NIE jest tutaj — to ręcznie tworzone dane, commitujemy je
+# (patrz CLAUDE.md, sekcja "Korekty ręczne i edytor"). Kopia zapasowa
+# tworzona przy każdym zapisie to co innego — czysto techniczna, nie warta
+# śledzenia w git.
+/korekty.json.bak
+
 __pycache__/
 *.pyc
+.venv/

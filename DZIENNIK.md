@@ -135,3 +135,73 @@ ekranie — więc automatyczny pomiar w tym środowisku nie odtwarza wielkości
 regresji, jaką autor czuł "na oko". Rozwiązanie: mierzyć KIERUNEK i STRUKTURĘ
 zmiany (te same wywołania przed/po, licznik `F` wbudowany na stałe), nie tylko
 bezwzględne milisekundy z jednego środowiska.
+
+## 2026-07-18 — zadanie 0004: edytor świata (graficzne korekty zamiast heurystyk)
+
+Co powstało: nowy plik `korekty.py` (dzielony przez `sim.py` i
+`scenariusz_800.py`) rozstrzyga wpisy `korekty.json` — zakotwiczone w lon/lat,
+nigdy w indeksach komórek — na indeksy BIEŻĄCEJ siatki przez `cKDTree`.
+`sim.py` (`Swiat.__init__`) nakłada korekty w kolejności z briefu: `lad` →
+krawędzie (cieśniny) → scenariusz → `panstwo`/`ziemia` → oznaczenie komórek
+jako `przypięte`. `scenariusz_800.py` czyta te same korekty i wyklucza
+przypięte komórki z filtra większościowego i testu spójności — bez tego
+automat w kółko kasowałby ręczną poprawkę (dokładnie przypadek Sheppey z
+briefu: 2–3 komórki poniżej `PROG_ODPRYSKU`, usuwane jako "odprysk", teraz
+chronione niezależnie od rozmiaru składowej, jeśli ktoś je przypiął).
+`server.py` dostał `GET`/`POST /api/korekty` (zapis robi `korekty.json.bak`
+przed nadpisaniem) — GET dorzuca rozstrzygnięte indeksy i stan SPRZED korekt
+(`_bazowe`/`_krawedzie_idx`), żeby klient-edytor nie musiał sam liczyć
+najbliższej komórki ani zgadywać, do czego wraca "gumka". Protokół binarny
+`/api/dane` dostał nowy blok `lonlat` (tożsamość geograficzna każdej komórki —
+jedyny sposób, żeby edytor w przeglądarce wiedział, JAKI punkt zapisać w
+korekcie, bez duplikowania matematyki odwzorowania Albersa w JS).
+
+Klient (`static/index.html`, `?edytor=1`): pięć narzędzi (Ląd/woda z
+malowaniem przeciąganiem, Przynależność z wyborem państwa/ziemi, Cieśnina,
+Rzeka, Gumka), pędzel 1/2 (`[`/`]`), Ctrl+Z cofający całe pociągnięcie (nie
+pojedynczą komórkę), licznik niezapisanych zmian + ostrzeżenie
+`beforeunload`, złota kreska przerywana prawdziwego wybrzeża Natural Earth
+(`meta.wybrzeze`, dane już były w projekcie, tylko nieużywane przez klienta),
+znaczniki na komórkach z korektą. Największa decyzja projektowa: diagram
+Woronoja (ścieżki jednostek/granic/wybrzeża) jest teraz PRZEBUDOWYWANY
+(`przebudujGeometrie()`/`przebudujGranice()`), nie tylko budowany raz przy
+starcie — batchowane przez `requestAnimationFrame` tym samym trikiem co
+`zaplanujRysowanie()`, żeby seria kliknięć podczas malowania nie przeliczała
+diagramu 60 razy na sekundę. W edytorze lewy przycisk myszy należy do
+narzędzia, prawy (już wcześniej działał jako pan, bo kod nie sprawdzał
+przycisku) przejął panoramowanie — zero zmiany zachowania poza edytorem.
+
+Druga decyzja: rozróżnienie "cofnij" (Ctrl+Z — wraca do stanu SPRZED TEGO
+pociągnięcia, może to być inna wcześniejsza korekta) od "gumka" (wraca do
+PRAWDZIWEGO stanu sprzed jakiejkolwiek korekty). Obie operacje dzielą jedną
+funkcję (`zastosujDoZywegoStanu`), różni je tylko to, jaki obiekt jej
+podajemy — ale wymagało to trzymania dwóch osobnych "baseline'ów": stanu
+sesyjnego (leniwie łapanego przy pierwszym dotknięciu komórki) i stanu
+sprzed korekt w ogóle (od serwera, dla komórek poprawionych w poprzednich
+sesjach). Sprawdzone w przeglądarce (Playwright, headless Chromium):
+kliknięcie zmienia mapę natychmiast, Ctrl+Z cofa całe pociągnięcie z wielu
+komórek naraz jedną operacją, zapis tworzy poprawny `korekty.json`
+(lon/lat, nie indeksy), a po przeładowaniu strony korekta wraca z serwera z
+licznikiem niezapisanych = 0 (bo już zapisana), i "gumka" na niej poprawnie
+przywraca PRAWDZIWY stan sprzed korekty (nie stan sprzed bieżącej sesji).
+Zweryfikowano też ręcznie przez `curl`: korekta `lad` zapisana przez
+`POST /api/korekty`, restart serwera (`uvicorn`), `GET /api/dane` pokazuje
+zmienioną komórkę — przeżywa restart, zgodnie z kryterium akceptacji.
+
+`test_scenariusz.py` dostał kryterium 7 w dwóch częściach: syntetyczny plik
+korekt (zawsze uruchamiany, nie zależy od tego, czy w repo jest jakiś
+prawdziwy `korekty.json`) sprawdza sam mechanizm (`lad`, `panstwo`+`ziemia`,
+`przypięte`); jeśli w repo istnieje prawdziwy `korekty.json`, jego wpisy też
+są sprawdzane względem świeżego `Swiat()`. Wszystkie istniejące niezmienniki
+(`test_ciesnin.py`, kryteria 1–6 `test_scenariusz.py`) przechodzą bez zmian.
+
+Co zaskoczyło: pilnowanie SPÓJNOŚCI między "ziemia" a "państwo" komórki.
+`kom_ziemia` i `kom_panstwo` to w `sim.py` NIEZALEŻNE tablice (ziemia to
+podział wewnątrz własności, nie sama własność) — edytor mógłby więc
+teoretycznie ustawić komórce państwo bez zmiany ziemi, co zepsułoby
+renderowanie po stronie klienta (kolor komórki liczony jest per ZIEMIA, żeby
+uniknąć osobnej tablicy właściciela na komórkę — koszt klatki się nie
+zmienia). Rozwiązanie: narzędzie "Przynależność" zawsze ustawia oba pola
+naraz (i czyści oba naraz przy Alt+klik) — format `korekty.json` i tak
+dopuszcza samo `panstwo` bez `ziemia` (dla ręcznej edycji pliku), ale edytor
+graficzny tej niespójności po prostu nie produkuje.
