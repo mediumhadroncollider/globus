@@ -983,7 +983,10 @@ cv.addEventListener("pointermove", ev => {
   let nowy = -1;
   if (x >= 0 && y >= 0 && x <= W && y <= H) {
     const c = delaunay.find(x, y);      // najbliższa komórka: superszybkie
-    if (lad[c]) nowy = c;
+    // W grze tylko ląd (woda nie ma nic do pokazania). W edytorze TEŻ woda —
+    // narzędzie Ląd/woda edytuje właśnie komórki morskie, więc panel musi
+    // umieć pokazać ich lon/lat/status korekty PRZED kliknięciem, nie tylko po.
+    if (lad[c] || EDYTOR) nowy = c;
   }
   if (nowy !== hoverCel) { hoverCel = nowy; odswiezInfo(); zaplanujRysowanie(); }
 });
