@@ -140,6 +140,21 @@ jest przypięta i automatyczne czyszczenie jej nie rusza.**
   jest natychmiastowy (klient sam przelicza ląd/przynależność i przebudowuje
   diagram Woronoja), ale symulacja poznaje zmianę dopiero po restarcie
   serwera — nie ma potrzeby przeładowywać stanu na żywo w trakcie edycji.
+- **Edytor dotyczy świata (geografia, przypisania), gra dotyczy stanu
+  (populacja, skarbce, podatki, podboje); w trybie edytora nie ma połączenia
+  z symulacją ani żadnej akcji zmieniającej stan gry** (brief 0006) — zero
+  WebSocketu, zero suwaka podatku/wyboru gracza/przełącznika widoków/rankingu,
+  Shift+klik nic nie robi. Widoczne od razu w karcie Sieć przeglądarki
+  (brak `WebSocket /ws [accepted]` w logu serwera) — to twardy test, nie tylko
+  wygląd interfejsu.
+- **Lewy przycisk zawsze przesuwa mapę; narzędzie działa na kliknięcie, nie
+  na przeciągnięcie** — edytor jest narzędziem do kilkunastu poprawek, nie do
+  malowania (brief 0005). Próg przeciągania (ten sam mechanizm co panoramowanie
+  w grze) rozstrzyga na `pointerup`: bez ruchu = klik = jedna operacja na
+  jednej komórce/krawędzi; powyżej progu = przeciągnięcie = pan, żadne
+  narzędzie się nie odpala. Narzędzie domyślne po wejściu do edytora to
+  Nawigacja (klik nic nie robi) — rozglądanie się po mapie ma być bezpieczne
+  od razu, bez wybierania niczego. `Esc` wraca do Nawigacji.
 
 ## Pomysły zaakceptowane kierunkowo (do dyskusji przed implementacją)
 
