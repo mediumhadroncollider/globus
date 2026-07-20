@@ -1,0 +1,46 @@
+{
+  "nazwa": "Sztabówka",
+  "klasaCss": "motyw-sztabowka",
+  "_uwaga": "Szkic (na później) — ostra kreska sztabowej mapy XIX w.: cienki czarny tusz na jasnym papierze, kreski BEZ zaokrąglenia.",
+
+  "tlo": {
+    "morze": "#c9d6c8",
+    "niczyje": "#e2ddc3",
+    "poza": "#12160f"
+  },
+
+  "panstwa": {
+    "nasycenie": 0.6,
+    "jasnosc": 1.15,
+    "krycie": 0.85,
+    "proceduralNasycenie": 0.22,
+    "proceduralJasnosc": 0.7
+  },
+
+  "mapaCiepla": { "od": [40, 50, 40], "do": [176, 60, 40] },
+
+  "kreski": {
+    "wybrzeze":       { "kolor": "#1a1f16",           "szerokosc": 1.4, "technika": "prosta" },
+    "granicaPanstwa": { "kolor": "#1a1f16",           "szerokosc": 2.0, "technika": "prosta" },
+    "granicaZiemi":   { "kolor": "rgba(26,31,22,.55)","szerokosc": 0.5, "technika": "prosta" },
+    "rzeka":          { "kolor": "#2f5f7a",           "szerokosc": 1.0, "technika": "prosta" },
+    "wybrzezeNE":     { "kolor": "#b23a26",           "szerokosc": 1.0, "technika": "prosta", "kreskowanie": [3, 2] }
+  },
+  "kreskaZaokraglona": false,
+
+  "edytor": {
+    "znacznikKorekty": { "kolor": "#b23a26", "promien": 2.6 }
+  },
+
+  "tekstura": { "rodzaj": "len", "krycie": 0.18, "kotwica": "swiat", "skala": 1.2 },
+  "winieta":  { "wlaczona": false, "sila": 0.0, "kolor": "#000000" },
+
+  "etykiety": {
+    "kroj": "\"Courier New\", ui-monospace, monospace",
+    "rozmiar": 13,
+    "swiatlo": "0.04em",
+    "aureola": "rgba(242,239,228,.9)",
+    "kolor": "#1a1f16",
+    "staleWzgledemEkranu": true
+  }
+}

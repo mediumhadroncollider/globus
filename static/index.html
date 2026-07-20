@@ -12,47 +12,58 @@
      (static/d3-delaunay.min.js): lokalna gra nie zależy od internetu, a wersja
      nigdy nie zniknie ani się nie zmieni pod nami. -->
 <script src="/static/d3-delaunay.min.js"></script>
+<!-- Motywy (zadanie 0007): motyw to DANE, ten plik CSS + static/motywy/<nazwa>.json
+     to renderer, który je czyta. motywy.css definiuje zmienne per klasa
+     .motyw-* (interfejs), JSON definiuje wygląd mapy (czytany przez JS niżej).
+     Klasa domyślna na <body> (motyw-wspolczesny) gwarantuje, że strona wygląda
+     poprawnie ZANIM JS zdąży przełączyć motyw wg ?motyw= — zero migotania dla
+     przypadku domyślnego. -->
+<link rel="stylesheet" href="/static/motywy/motywy.css">
 <style>
-  /* Wygląd interfejsu — zwykły CSS, nic magicznego */
+  /* Wygląd interfejsu — zwykły CSS, WYŁĄCZNIE przez zmienne z motywy.css.
+     Żadnego literału koloru/kroju tutaj (patrz CLAUDE.md, sekcja "Motywy"). */
   * { box-sizing: border-box; }
-  body { margin: 0; background: #10151b; color: #e8e2d2;
-         font-family: Georgia, serif; overflow: hidden;
+  body { margin: 0; background: var(--tlo-strony); color: var(--tekst);
+         font-family: var(--kroj-ui); overflow: hidden;
          display: flex; flex-direction: column; height: 100vh; }
   #pasek { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-           padding: 10px 16px; border-bottom: 1px solid #2a2f36; }
+           padding: 10px 16px; border-bottom: 1px solid var(--ramka-pasek); }
   #pasek-edytor { display: none; align-items: center; gap: 10px; flex-wrap: wrap;
-                  padding: 8px 16px; border-bottom: 1px solid #2a2f36; background: #171d24; }
+                  padding: 8px 16px; border-bottom: 1px solid var(--ramka-pasek);
+                  background: var(--tlo-panel-solid); }
   #tytul { font-size: 17px; letter-spacing: .22em; text-transform: uppercase; }
-  #tytul span { color: #8a8272; font-size: 12px; letter-spacing: .08em; }
+  #tytul span { color: var(--tekst-przygaszony); font-size: 12px; letter-spacing: .08em; }
   button, select { padding: 6px 12px; font-size: 12px; letter-spacing: .06em;
-    cursor: pointer; background: transparent; color: #d8d2c2;
-    border: 1px solid #4a4438; border-radius: 3px; font-family: inherit;
+    cursor: pointer; background: transparent; color: var(--tekst-przycisk);
+    border: 1px solid var(--ramka-przycisk); border-radius: 3px; font-family: inherit;
     text-transform: uppercase; }
   button:disabled { opacity: .35; cursor: default; }
-  button.aktywny { background: #c9a227; color: #171512; border-color: #c9a227; }
-  select { text-transform: none; background: #171d24; }
-  #pasek a, #pasek-edytor a { color: #8a8272; text-decoration: none; font-size: 12px;
+  button.aktywny { background: var(--akcent); color: var(--akcent-tekst); border-color: var(--akcent); }
+  select { text-transform: none; background: var(--tlo-panel-solid); }
+  #pasek a, #pasek-edytor a { color: var(--tekst-przygaszony); text-decoration: none; font-size: 12px;
     letter-spacing: .06em; text-transform: uppercase; }
-  #pasek a:hover, #pasek-edytor a:hover { color: #c9a227; text-decoration: underline; }
+  #pasek a:hover, #pasek-edytor a:hover { color: var(--akcent); text-decoration: underline; }
   /* Scena zajmuje CAŁĄ resztę wysokości (flex:1), niezależnie od tego, czy nad
      nią jest jeden pasek (gra) czy dwa (edytor) — bez tego drugi pasek by
      ukradł miejsce spod mapy, zamiast się nad nią doliczyć. */
   #scena { position: relative; width: 100vw; flex: 1 1 auto; min-height: 0; }
   canvas { position: absolute; inset: 0; touch-action: none; }
-  .panel { position: absolute; background: rgba(16,20,26,.9);
-           border: 1px solid #3a3f47; border-radius: 4px; padding: 10px 14px;
+  .panel { position: absolute; background: var(--tlo-panel);
+           border: 1px solid var(--ramka-panel); border-radius: 4px; padding: 10px 14px;
            font-size: 12px; pointer-events: none; line-height: 1.5; }
   #info    { left: 14px; bottom: 14px; min-width: 240px; }
   #ranking { right: 14px; top: 14px; min-width: 230px; }
   #suwak-box { display: flex; align-items: center; gap: 8px; font-size: 12px;
-               color: #b8b0a0; }
-  input[type=range] { width: 130px; accent-color: #c9a227; }
-  .zloto { color: #c9a227; }
-  .szary { color: #8a8272; }
-  hr.roz { border: none; border-top: 1px solid #3a3f47; margin: 6px 0; }
+               color: var(--tekst-drugorzedny); }
+  input[type=range] { width: 130px; accent-color: var(--akcent); }
+  .zloto { color: var(--akcent); }
+  .szary { color: var(--tekst-przygaszony); }
+  .blad { color: var(--blad); }
+  .tytul-edytor { color: var(--akcent-edytor); }
+  hr.roz { border: none; border-top: 1px solid var(--ramka-panel); margin: 6px 0; }
 </style>
 </head>
-<body>
+<body class="motyw-wspolczesny">
 
 <div id="pasek">
   <div id="tytul">Hegemon <span>· żywy kontynent po WebSockecie</span></div>
@@ -88,6 +99,9 @@
   <span class="szary">|</span>
   <button id="e-wybrzeze" class="aktywny" title="Prawdziwa linia brzegowa Natural Earth (złota kreska przerywana)">Wybrzeże NE</button>
   <span class="szary">|</span>
+  <span class="szary">motyw:</span>
+  <select id="e-motyw" title="Podgląd stylu mapy na żywo — nie ma wpływu na korekty ani zapis"></select>
+  <span class="szary">|</span>
   <span class="szary">niezapisane:</span> <b id="e-licznik" class="zloto">0</b>
   <button id="e-zapisz">Zapisz</button>
   <div style="flex:1"></div>
@@ -109,14 +123,15 @@
 const _info = document.getElementById("info");
 const etap = (t) => { _info.textContent = t; };
 window.addEventListener("error", e => {
-  _info.innerHTML = "<b style='color:#e07050'>Błąd:</b> " + e.message;
+  _info.innerHTML = "<b class='blad'>Błąd:</b> " + e.message;
 });
 try {
 
 // Tryb edytora świata (zadanie 0004): włączany WYŁĄCZNIE parametrem URL
 // ?edytor=1, żeby nie zaśmiecać zwykłej rozgrywki. Sprawdzamy to na samym
 // początku — cała reszta skryptu odwołuje się do tej jednej stałej.
-const EDYTOR = new URLSearchParams(location.search).get("edytor") === "1";
+const paramsUrl = new URLSearchParams(location.search);
+const EDYTOR = paramsUrl.get("edytor") === "1";
 // Połączenie z symulacją — otwierane WYŁĄCZNIE poza edytorem (sekcja 6).
 // Edytor dotyczy świata, nie stanu gry: bez ticków, rankingu, map ciepła nie
 // ma po co łączyć się z serwerem WebSocket (brief 0006). `let` zamiast
@@ -124,14 +139,41 @@ const EDYTOR = new URLSearchParams(location.search).get("edytor") === "1";
 let ws = null;
 
 /* ===========================================================================
+   0. MOTYW (zadanie 0007): motyw to DANE, ten skrypt to RENDERER, który je
+   wykonuje. Katalog motywów jest tu wpisany wprost — /static/ to zwykłe
+   pliki statyczne, bez endpointu listującego (brief 0007, "GET .../<nazwa>.json
+   — zwykły plik statyczny, bez endpointu"), więc nie ma skąd tej listy
+   odczytać automatycznie.
+   =========================================================================== */
+const MOTYWY_DOSTEPNE = ["wspolczesny", "pergamin", "sztabowka"];
+const MOTYWY_ETYKIETY = { wspolczesny: "Współczesny", pergamin: "Pergamin", sztabowka: "Sztabówka" };
+let nazwaMotywu = paramsUrl.get("motyw") || "wspolczesny";
+if (!MOTYWY_DOSTEPNE.includes(nazwaMotywu)) nazwaMotywu = "wspolczesny";
+
+// Wczytuje JSON motywu i podmienia klasę na <body> (motyw i interfejs
+// przełączają się RAZEM, jedną operacją — patrz motywy.css). Zwraca dane
+// motywu; NIE trzyma stanu samodzielnie — o to dba wołający (zmienna `motyw`
+// niżej, sekcja 3).
+async function wczytajMotyw(nazwa) {
+  const odp = await fetch(`/static/motywy/${nazwa}.json`);
+  if (!odp.ok) throw new Error(`nie znaleziono motywu "${nazwa}" (/static/motywy/${nazwa}.json, status ${odp.status})`);
+  const dane = await odp.json();
+  document.body.classList.remove(...MOTYWY_DOSTEPNE.map(n => `motyw-${n}`));
+  document.body.classList.add(dane.klasaCss);
+  return dane;
+}
+
+/* ===========================================================================
    1. POBRANIE ŚWIATA
-   Dwa zapytania: małe dane JSON-em, wielkie tablice jako czyste bajty.
-   W trybie edytora dochodzi trzecie: lista korekt (do podświetlenia tego,
-   co już poprawiono, i do dokładnego działania "gumki" — patrz sekcja 4b).
+   Trzy zapytania: motyw i opis świata JSON-em, wielkie tablice jako czyste
+   bajty. W trybie edytora dochodzi czwarte: lista korekt (do podświetlenia
+   tego, co już poprawiono, i do dokładnego działania "gumki" — sekcja 4b).
    =========================================================================== */
 if (typeof d3 === "undefined") {
   throw new Error("nie wczytał się /static/d3-delaunay.min.js (sprawdź, czy plik jest w katalogu static/)");
 }
+etap("Wczytuję motyw…");
+let motyw = await wczytajMotyw(nazwaMotywu);
 etap("Pobieram opis świata…");
 const meta = await (await fetch("/api/meta")).json();
 etap("Pobieram tablice świata…");
@@ -144,7 +186,6 @@ if (EDYTOR) {
 
 const N = meta.n_komorek;
 const TRYB_SCENARIUSZA = !!meta.tryb_scenariusza;
-const KOLOR_NICZYJE = "#5c6656";   // "jednolity szarozielony" (patrz brief 0001)
 
 // Nakładamy "widoki" na wspólny bufor bajtów — kolejność i typy MUSZĄ
 // odpowiadać temu, co skleja server.py (nasz mini-protokół binarny):
@@ -318,32 +359,78 @@ przebudujGranice();
 
 /* ===========================================================================
    3. KOLORY I WARSTWY RENDEROWANIA
+   Zasada z CLAUDE.md ("Motywy"): scenariusz mówi KTO jest złoty (kolor
+   bazowy państwa), motyw mówi JAK wygląda złoty (nasycenie/jasność/krycie —
+   patrz motyw.panstwa) — motyw PRZETWARZA kolor scenariusza, nie zastępuje go.
    =========================================================================== */
-// paleta właścicieli: barwy z PANSTWA (scenariusz) albo równe kroki po kole
-// barw, jak dawniej (tryb proceduralny, działa dla dowolnego n_krol).
-const kolorWlasciciela = TRYB_SCENARIUSZA
-  ? meta.panstwa.map(p => p.kolor)
-  : Array.from({ length: nWlascicieli }, (_, k) => `hsl(${(k * 360 / nWlascicieli) | 0} 34% 58%)`);
+function clamp01(x) { return Math.max(0, Math.min(1, x)); }
+function hexNaRgb(hex) {
+  hex = hex.replace("#", "");
+  if (hex.length === 3) hex = hex.split("").map(c => c + c).join("");
+  const num = parseInt(hex, 16);
+  return [(num >> 16) & 255, (num >> 8) & 255, num & 255];
+}
+// Konwersja RGB -> HSL (h w stopniach, s/l w [0,1]) — potrzebna, żeby motyw
+// mógł MNOŻYĆ nasycenie/jasność koloru scenariusza, zamiast go zastępować.
+function rgbNaHsl(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h = 0, s = 0;
+  const l = (max + min) / 2;
+  const d = max - min;
+  if (d !== 0) {
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+      case g: h = (b - r) / d + 2; break;
+      default: h = (r - g) / d + 4;
+    }
+    h *= 60;
+  }
+  return [h, s, l];
+}
+function hsla(h, s, l, a) { return `hsla(${h} ${clamp01(s) * 100}% ${clamp01(l) * 100}% / ${a})`; }
 
-// mapa ciepła dla populacji/dochodu: granat -> złoto (prosty lerp dwóch barw)
+// Kolor właściciela = kolor bazowy (ze scenariusza, jeśli jest) PRZETWORZONY
+// przez motyw. Bez koloru bazowego (tryb proceduralny, brak scenariusza)
+// motyw dostarcza WŁASNĄ bazę HSL (motyw.panstwa.proceduralNasycenie/Jasnosc)
+// zamiast mnożnika — nie ma czego mnożyć.
+function kolorWlascicielaZBazy(bazowyHex, indeks) {
+  const p = motyw.panstwa;
+  if (bazowyHex) {
+    const [r, g, b] = hexNaRgb(bazowyHex);
+    const [h, s, l] = rgbNaHsl(r, g, b);
+    return hsla(h, s * p.nasycenie, l * p.jasnosc, p.krycie);
+  }
+  return hsla(indeks * 360 / nWlascicieli, p.proceduralNasycenie, p.proceduralJasnosc, p.krycie);
+}
+// paleta właścicieli: barwy z PANSTWA (scenariusz) albo równe kroki po kole
+// barw, jak dawniej (tryb proceduralny, działa dla dowolnego n_krol). `let`,
+// bo zmiana motywu (edytor) przelicza tę tablicę na nowo — patrz zmienMotyw().
+let kolorWlasciciela = TRYB_SCENARIUSZA
+  ? meta.panstwa.map((p, i) => kolorWlascicielaZBazy(p.kolor, i))
+  : Array.from({ length: nWlascicieli }, (_, k) => kolorWlascicielaZBazy(null, k));
+
+// mapa ciepła dla populacji/dochodu: lerp dwóch barw z motyw.mapaCiepla
 function cieplo(t) {
-  t = Math.max(0, Math.min(1, t));
-  const r = 30 + t * (231 - 30), g = 45 + t * (185 - 45), b = 80 + t * (69 - 80);
-  return `rgb(${r|0},${g|0},${b|0})`;
+  t = clamp01(t);
+  const [r0, g0, b0] = motyw.mapaCiepla.od, [r1, g1, b1] = motyw.mapaCiepla.do;
+  const r = r0 + t * (r1 - r0), g = g0 + t * (g1 - g0), b = b0 + t * (b1 - b0);
+  return `rgb(${r | 0},${g | 0},${b | 0})`;
 }
 
-// Warstwa "władcy" zmienia się rzadko (podboje, edycje) — trzymamy ją wypaloną
-// na niewidocznym canvasie i tylko kopiujemy. Mapy ciepła malujemy na żywo,
-// bo to ledwie kilka tysięcy ścieżek jednostek.
+// Warstwa "władcy" zmienia się rzadko (podboje, edycje, zmiana motywu) —
+// trzymamy ją wypaloną na niewidocznym canvasie i tylko kopiujemy. Mapy
+// ciepła malujemy na żywo, bo to ledwie kilka tysięcy ścieżek jednostek.
 const wladcyCv = document.createElement("canvas");
 wladcyCv.width = W * RS; wladcyCv.height = H * RS;
 function wypalWladcow() {
   const g = wladcyCv.getContext("2d");
   g.setTransform(RS, 0, 0, RS, 0, 0);
-  g.fillStyle = "#26313c"; g.fillRect(0, 0, W, H);
+  g.fillStyle = motyw.tlo.morze; g.fillRect(0, 0, W, H);
   g.lineWidth = 1;
   // ziemia niczyja: jedna szara masa pod spodem
-  g.fillStyle = g.strokeStyle = KOLOR_NICZYJE;
+  g.fillStyle = g.strokeStyle = motyw.tlo.niczyje;
   g.fill(sciezkaNiczyje); g.stroke(sciezkaNiczyje);
   for (let j = 0; j < nJednostek; j++) {
     g.fillStyle = g.strokeStyle = kolorWlasciciela[wlasciciel[j]];
@@ -362,11 +449,27 @@ function wypalNiczyje() {
   const g = niczyjeCv.getContext("2d");
   g.setTransform(RS, 0, 0, RS, 0, 0);
   g.clearRect(0, 0, W, H);
-  g.fillStyle = g.strokeStyle = KOLOR_NICZYJE;
+  g.fillStyle = g.strokeStyle = motyw.tlo.niczyje;
   g.lineWidth = 1;
   g.fill(sciezkaNiczyje); g.stroke(sciezkaNiczyje);
 }
 wypalNiczyje();
+
+// Przełączenie motywu (na żywo, tylko w edytorze — patrz sekcja 3b): wczytuje
+// nowy JSON, podmienia klasę na <body> (motywy.css — mapa i interfejs razem),
+// przelicza kolory władców (zależą od motyw.panstwa) i PRZEBUDOWUJE wypalone
+// warstwy — inaczej wladcyCv/niczyjeCv zostałyby w starych kolorach (brief
+// 0007, kryterium 5).
+async function zmienMotyw(nazwa) {
+  motyw = await wczytajMotyw(nazwa);
+  nazwaMotywu = nazwa;
+  kolorWlasciciela = TRYB_SCENARIUSZA
+    ? meta.panstwa.map((p, i) => kolorWlascicielaZBazy(p.kolor, i))
+    : Array.from({ length: nWlascicieli }, (_, k) => kolorWlascicielaZBazy(null, k));
+  wypalWladcow();
+  wypalNiczyje();
+  rysuj();
+}
 
 /* ===========================================================================
    3b. EDYTOR ŚWIATA (zadanie 0004)
@@ -669,7 +772,7 @@ if (EDYTOR) {
   // Wszystko poniżej albo znika z ekranu, albo w ogóle się nie uruchamia —
   // patrz też sekcja 6 (WebSocket) i pointerup w sekcji 5 (Shift+klik).
   document.getElementById("tytul").innerHTML =
-    'HEGEMON <span style="color:#e0734a">· EDYTOR ŚWIATA</span>';
+    'HEGEMON <span class="tytul-edytor">· EDYTOR ŚWIATA</span>';
   document.getElementById("pasek-edytor").style.display = "flex";
   ["w-wladcy", "w-pop", "w-doch", "sep-widok", "etykieta-gracz", "wybor-krol", "suwak-box", "lnk-edytor"]
     .forEach(id => { document.getElementById(id).style.display = "none"; });
@@ -730,6 +833,19 @@ if (EDYTOR) {
     pokazWybrzezeNE = !pokazWybrzezeNE;
     btnWybrzeze.classList.toggle("aktywny", pokazWybrzezeNE);
     zaplanujRysowanie();
+  };
+
+  // Lista motywów: narzędzie do PORÓWNYWANIA wariantów stylu na żywo (brief
+  // 0007) — nie zapisuje niczego, nie dotyczy stanu edytora (korekt).
+  const wyborMotywEdytor = document.getElementById("e-motyw");
+  MOTYWY_DOSTEPNE.forEach(nazwa => {
+    const o = document.createElement("option");
+    o.value = nazwa; o.textContent = MOTYWY_ETYKIETY[nazwa] || nazwa;
+    wyborMotywEdytor.appendChild(o);
+  });
+  wyborMotywEdytor.value = nazwaMotywu;
+  wyborMotywEdytor.onchange = () => {
+    zmienMotyw(wyborMotywEdytor.value).catch(err => pokazKomunikat("Błąd motywu: " + err.message, 4000));
   };
 
   document.getElementById("e-zapisz").onclick = async () => {
@@ -829,6 +945,95 @@ function ustawWidokStartowy() {
 }
 function resetWidok() { ustawWidokStartowy(); zaplanujRysowanie(); }
 
+/* ---------------------------------------------------------------------------
+   TEKSTURA I WINIETA (zadanie 0007) — motyw.tekstura.rodzaj wskazuje
+   GENERATOR PO NAZWIE ("brak"/"papier"/"len"); same generatory zostają w
+   kodzie, JSON tylko wybiera, który odpalić (ta sama umowa co CSS
+   background-image — deklarujesz, nie piszesz rasteryzatora). Każdy
+   generator buduje mały kafelek RAZ (cache po rodzaju+skali), dalej to
+   zwykły powtarzalny CanvasPattern — tanie niezależnie od wielkości ekranu.
+   --------------------------------------------------------------------------- */
+// Kolory WEWNĄTRZ generatorów (szarości ziarna/płótna) celowo zostają tu,
+// w kodzie — to dosłownie umowa z briefu 0007 ("tekstura.rodzaj wskazuje
+// generator po nazwie; same generatory zostają w kodzie"). Motyw wybiera
+// generator i kontroluje jego widoczność (krycie, kotwica, skala), nie maluje
+// go ręcznie — dokładnie jak w CSS: deklarujesz background-image, nie piszesz
+// rasteryzatora.
+function kafelekPapier(skala) {
+  const bok = Math.round(96 * skala);
+  const cv2 = document.createElement("canvas");
+  cv2.width = cv2.height = bok;
+  const g2 = cv2.getContext("2d");
+  const obraz = g2.createImageData(bok, bok);
+  for (let i = 0; i < obraz.data.length; i += 4) {
+    const szarosc = 140 + Math.floor(Math.random() * 100);   // ziarno papieru
+    obraz.data[i] = obraz.data[i + 1] = obraz.data[i + 2] = szarosc;
+    obraz.data[i + 3] = 255;
+  }
+  g2.putImageData(obraz, 0, 0);
+  return cv2;
+}
+function kafelekLen(skala) {
+  const bok = Math.max(4, Math.round(24 * skala));
+  const cv2 = document.createElement("canvas");
+  cv2.width = cv2.height = bok;
+  const g2 = cv2.getContext("2d");
+  g2.fillStyle = "#808080"; g2.fillRect(0, 0, bok, bok);
+  g2.lineWidth = Math.max(1, bok * 0.08);
+  g2.strokeStyle = "#9c9c9c"; g2.beginPath(); g2.moveTo(0, 0); g2.lineTo(bok, bok); g2.stroke();
+  g2.strokeStyle = "#5c5c5c"; g2.beginPath(); g2.moveTo(bok, 0); g2.lineTo(0, bok); g2.stroke();
+  return cv2;
+}
+const GENERATORY_TEKSTUR = { papier: kafelekPapier, len: kafelekLen };
+const cacheWzorowTekstur = new Map();
+function wzorTekstury(g, rodzaj, skala) {
+  const generator = GENERATORY_TEKSTUR[rodzaj];
+  if (!generator) return null;   // "brak" (albo nazwa spoza katalogu) = nic do narysowania
+  const klucz = rodzaj + ":" + skala;
+  if (!cacheWzorowTekstur.has(klucz)) {
+    cacheWzorowTekstur.set(klucz, g.createPattern(generator(skala), "repeat"));
+  }
+  return cacheWzorowTekstur.get(klucz);
+}
+// kotwica "ekran": ziarno stoi w miejscu ekranu — rysujemy PO zresetowaniu
+// transformacji kamery, w surowych pikselach urządzenia.
+// kotwica "swiat": tekstura jedzie pod transformacją kamery, więc skaluje
+// się i przesuwa razem z mapą (patrz CLAUDE.md/brief 0007).
+function rysujTeksture(g) {
+  const t = motyw.tekstura;
+  if (!t || t.krycie <= 0) return;
+  const wzor = wzorTekstury(g, t.rodzaj, t.skala);
+  if (!wzor) return;
+  g.save();
+  g.globalAlpha = t.krycie;
+  g.globalCompositeOperation = "overlay";
+  g.fillStyle = wzor;
+  if (t.kotwica === "swiat") {
+    g.fillRect(0, 0, W, H);
+  } else {
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.fillRect(0, 0, cv.width, cv.height);
+  }
+  g.restore();
+}
+// Winieta jest zjawiskiem EKRANU (przyciemnienie krawędzi kadru), nie mapy —
+// zawsze rysowana poza transformacją kamery, niezależnie od kotwicy tekstury.
+function rysujWiniete(g) {
+  const w = motyw.winieta;
+  if (!w || !w.wlaczona || w.sila <= 0) return;
+  const szer = scena.clientWidth, wys = scena.clientHeight;
+  const promien = Math.hypot(szer, wys) / 2;
+  g.save();
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  const grad = g.createRadialGradient(szer / 2, wys / 2, promien * 0.55, szer / 2, wys / 2, promien);
+  grad.addColorStop(0, "transparent");   // środek zawsze przezroczysty — to definicja winiety, nie kolor motywu
+  grad.addColorStop(1, w.kolor);
+  g.globalAlpha = w.sila;
+  g.fillStyle = grad;
+  g.fillRect(0, 0, szer, wys);
+  g.restore();
+}
+
 function rysuj() {
   const t0 = licznikKlatek ? performance.now() : 0;
   const dpr = window.devicePixelRatio || 1;
@@ -837,13 +1042,13 @@ function rysuj() {
   }
   const g = cv.getContext("2d");
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
-  g.fillStyle = "#10151b"; g.fillRect(0, 0, scena.clientWidth, scena.clientHeight);
+  g.fillStyle = motyw.tlo.poza; g.fillRect(0, 0, scena.clientWidth, scena.clientHeight);
   g.setTransform(kam.s*dpr, 0, 0, kam.s*dpr, kam.tx*dpr, kam.ty*dpr);
 
   if (widok === "wladcy") {
     g.drawImage(wladcyCv, 0, 0, W, H);
   } else {
-    g.fillStyle = "#26313c";
+    g.fillStyle = motyw.tlo.morze;
     g.fillRect(0, 0, W, H);
     g.drawImage(niczyjeCv, 0, 0, W, H);
     const dane = widok === "pop" ? jednPop : jednDoch;
@@ -863,7 +1068,10 @@ function rysuj() {
   // Antidotum: dzielimy przez skalę — szerokość w świecie maleje dokładnie
   // tak, jak zoom rośnie, więc na ekranie kreska ma zawsze tyle samo pikseli
   // (tak robią wszystkie mapy internetowe).
-  g.lineJoin = g.lineCap = "round";
+  // Zaokrąglenie kreski to WYGLĄD (motyw.kreskaZaokraglona), nie technikalia —
+  // sztabówka np. chce ostrych, kanciastych kresek ("ostra kreska XIX w.").
+  g.lineJoin = motyw.kreskaZaokraglona ? "round" : "miter";
+  g.lineCap  = motyw.kreskaZaokraglona ? "round" : "butt";
   // Przy mocnym oddaleniu granica jednostek (najgęstszy Path2D) jest i tak
   // niewidoczna — pomijamy ją, żeby zoom nie dławił. To realnie chroni tylko
   // TRYB PROCEDURALNY (grJednostka ~180 tys. odcinków, cała mapa podzielona
@@ -872,39 +1080,57 @@ function rysuj() {
   // niepotrzebnie chował granice ziem przy oddaleniu; *1.5 daje margines na
   // wypadek dużych scenariuszy, nie kasując widoczności przy typowym zoomie.
   if (kam.s >= kam.min * 1.5) {
-    g.strokeStyle = "rgba(20,16,10,.4)"; g.lineWidth = 0.7 / kam.s; g.stroke(grJednostka);
+    g.strokeStyle = motyw.kreski.granicaZiemi.kolor;
+    g.lineWidth = motyw.kreski.granicaZiemi.szerokosc / kam.s;
+    g.stroke(grJednostka);
   }
-  g.strokeStyle = "#1d1912"; g.lineWidth = 2.6 / kam.s; g.stroke(grWlasciciel);
-  g.strokeStyle = "#171d24"; g.lineWidth = 1.9 / kam.s; g.stroke(grBrzeg);
+  g.strokeStyle = motyw.kreski.granicaPanstwa.kolor;
+  g.lineWidth = motyw.kreski.granicaPanstwa.szerokosc / kam.s;
+  g.stroke(grWlasciciel);
+  g.strokeStyle = motyw.kreski.wybrzeze.kolor;
+  g.lineWidth = motyw.kreski.wybrzeze.szerokosc / kam.s;
+  g.stroke(grBrzeg);
 
-  // podświetlenie jednostki pod kursorem — ziemi niczyjej NIGDY (23 600
+  // podświetlenie jednostki pod kursorem — kolor NIE żyje w JSON-ie motywu,
+  // tylko w motywy.css (--akcent-podswietlenie): to dokładnie przypadek
+  // "jedna paleta" z CLAUDE.md — canvas czyta tę samą zmienną, której używa
+  // interfejs, przez getComputedStyle(document.body), więc nie ma dwóch
+  // źródeł prawdy dla tego samego koloru. Ziemi niczyjej NIGDY (23 600
   // wielokątów wypełnianych co klatkę zoomu; nie ma tam nic do wskazania,
   // panel info i tak mówi, że to ziemie niczyje — patrz brief 0003).
   if (hoverCel >= 0 && lad[hoverCel]) {
     const j = komJednostka[hoverCel];
     if (j >= 0) {
-      g.fillStyle = "rgba(255,250,235,.22)";
+      g.fillStyle = getComputedStyle(document.body).getPropertyValue("--akcent-podswietlenie").trim();
       g.fill(sciezkaJednostki[j]);
     }
   }
 
+  // Tekstura i winieta rysują się NAD mapą, ale POD pomocami edytora — to
+  // pomoce autorskie (znacznik korekty, wybrzeże NE) muszą zostać czytelne
+  // niezależnie od tego, jak mocno motyw przyciemnia/ziarni resztę widoku.
+  rysujTeksture(g);
+  rysujWiniete(g);
+
   // --- pomoce ekranowe edytora (brief 0004) --------------------------------
   if (EDYTOR) {
     if (pokazWybrzezeNE) {
+      const kNE = motyw.kreski.wybrzezeNE;
       g.save();
-      g.setLineDash([4 / kam.s, 3 / kam.s]);
-      g.strokeStyle = "#c9a227"; g.lineWidth = 1.3 / kam.s;
+      g.setLineDash((kNE.kreskowanie || []).map(v => v / kam.s));
+      g.strokeStyle = kNE.kolor; g.lineWidth = kNE.szerokosc / kam.s;
       g.stroke(sciezkaWybrzezeNE);
       g.restore();
     }
     // rzeki: znacznik/rysunek, bez wpływu na mechanikę (na razie)
+    const kRz = motyw.kreski.rzeka;
     g.setLineDash([]);
-    g.strokeStyle = "#3d7dc9"; g.lineWidth = 1.6 / kam.s;
+    g.strokeStyle = kRz.kolor; g.lineWidth = kRz.szerokosc / kam.s;
     g.stroke(sciezkaRzek);
     // komórki z korektą: mały gruby znacznik w środku, żeby było widać co
     // jest ręczne, a co automatyczne (bez tego trudno odróżnić po samym kolorze)
-    g.fillStyle = "#e8c85a";
-    const promien = 3 / kam.s;
+    g.fillStyle = motyw.edytor.znacznikKorekty.kolor;
+    const promien = motyw.edytor.znacznikKorekty.promien / kam.s;
     for (const idx of korektyKomorek.keys()) {
       g.beginPath();
       g.arc(punkty[idx*2], punkty[idx*2+1], promien, 0, Math.PI * 2);
@@ -1158,13 +1384,13 @@ function budujInfoEdytora() {
     ląd: <b>${lad[hoverCel] ? "tak" : "nie"}</b><br>
     jednostka: <b>${jednostkaTxt}</b><br>
     właściciel: <b>${wlascicielTxt}</b><br>
-    korekta: <b style="color:${wpis ? "#c9a227" : "#8a8272"}">${wpis ? "TAK" : "nie"}</b>
+    korekta: <b class="${wpis ? "zloto" : "szary"}">${wpis ? "TAK" : "nie"}</b>
     ${wpis ? `<br><span class="szary">${opisKorekty}</span>` : ""}`;
 }
 
 function odswiezInfo() {
   if (komunikat && performance.now() < komunikat.doCzasu) {
-    info.innerHTML = `<b style="color:#e07050">${komunikat.tekst}</b>`;
+    info.innerHTML = `<b class="blad">${komunikat.tekst}</b>`;
     return;
   }
   if (EDYTOR) { info.innerHTML = budujInfoEdytora(); return; }
@@ -1240,7 +1466,7 @@ Object.entries(przyciskiWidoku).forEach(([nazwa, btn]) => {
 });
 
 } catch (err) {
-  _info.innerHTML = "<b style='color:#e07050'>Błąd startu:</b> " + err.message;
+  _info.innerHTML = "<b class='blad'>Błąd startu:</b> " + err.message;
   console.error(err);
 }
 })();

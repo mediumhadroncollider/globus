@@ -1,0 +1,46 @@
+{
+  "nazwa": "Współczesny",
+  "klasaCss": "motyw-wspolczesny",
+  "_uwaga": "Punkt wyjścia — 1:1 wygląd gry sprzed zadania 0007 (motywy). Zmiana tego pliku zmienia wygląd domyślny.",
+
+  "tlo": {
+    "morze": "#26313c",
+    "niczyje": "#5c6656",
+    "poza": "#10151b"
+  },
+
+  "panstwa": {
+    "nasycenie": 1.0,
+    "jasnosc": 1.0,
+    "krycie": 1.0,
+    "proceduralNasycenie": 0.34,
+    "proceduralJasnosc": 0.58
+  },
+
+  "mapaCiepla": { "od": [30, 45, 80], "do": [231, 185, 69] },
+
+  "kreski": {
+    "wybrzeze":       { "kolor": "#171d24",           "szerokosc": 1.9, "technika": "prosta" },
+    "granicaPanstwa": { "kolor": "#1d1912",           "szerokosc": 2.6, "technika": "prosta" },
+    "granicaZiemi":   { "kolor": "rgba(20,16,10,.4)", "szerokosc": 0.7, "technika": "prosta" },
+    "rzeka":          { "kolor": "#3d7dc9",           "szerokosc": 1.6, "technika": "prosta" },
+    "wybrzezeNE":     { "kolor": "#c9a227",           "szerokosc": 1.3, "technika": "prosta", "kreskowanie": [4, 3] }
+  },
+  "kreskaZaokraglona": true,
+
+  "edytor": {
+    "znacznikKorekty": { "kolor": "#e8c85a", "promien": 3 }
+  },
+
+  "tekstura": { "rodzaj": "brak", "krycie": 0.0, "kotwica": "ekran", "skala": 1.0 },
+  "winieta":  { "wlaczona": false, "sila": 0.0, "kolor": "#000000" },
+
+  "etykiety": {
+    "kroj": "Georgia, serif",
+    "rozmiar": 14,
+    "swiatlo": "0.06em",
+    "aureola": "rgba(16,21,27,.85)",
+    "kolor": "#e8e2d2",
+    "staleWzgledemEkranu": true
+  }
+}

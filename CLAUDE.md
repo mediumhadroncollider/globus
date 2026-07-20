@@ -156,6 +156,39 @@ jest przypięta i automatyczne czyszczenie jej nie rusza.**
   Nawigacja (klik nic nie robi) — rozglądanie się po mapie ma być bezpieczne
   od razu, bez wybierania niczego. `Esc` wraca do Nawigacji.
 
+## Motywy
+
+**Motyw to dane, renderer to implementacja — w kodzie rysującym nie ma ani
+jednej stałej wizualnej; scenariusz mówi KTO jest złoty, motyw mówi JAK
+wygląda złoty; mapa i interfejs dzielą paletę przez zmienne CSS.**
+
+- Pliki: `static/motywy/motywy.css` (zmienne CSS interfejsu per klasa
+  `.motyw-<nazwa>` na `<body>`) + `static/motywy/<nazwa>.json` (wygląd mapy:
+  kolory, kreski, tekstura, winieta). Domyślny motyw to `wspolczesny`
+  (1:1 wygląd sprzed zadania 0007); wybór przez `?motyw=`, w edytorze
+  (`?edytor=1`) dodatkowo rozwijana lista przełączająca na żywo.
+- Podział odpowiedzialności rozstrzygnięty raz: **scenariusz** deklaruje
+  kolor bazowy bytu politycznego (tożsamość, wspólna dla wszystkich
+  motywów) — **motyw** ten kolor PRZETWARZA (mnożniki nasycenia/jasności,
+  RGB→HSL→RGB), nigdy nie zastępuje. Analogicznie Cantia na pergaminie i na
+  sztabówce to wciąż ta sama Cantia.
+- Kolor współdzielony między mapą a interfejsem (np. podświetlenie jednostki
+  pod kursorem) żyje jako zmienna CSS w `motywy.css`, czytana przez canvas
+  przez `getComputedStyle(document.body)` — jedno źródło prawdy, nie
+  duplikat w JSON-ie i w CSS jednocześnie.
+- `tekstura.rodzaj` w JSON-ie wskazuje generator PO NAZWIE (`"brak"`,
+  `"papier"`, `"len"`) — same generatory (szum/kreskowanie) zostają w
+  kodzie; JSON opisuje, nie wykonuje (ta sama umowa co CSS
+  `background-image`). Technika kreski poza `"prosta"` (np. `"wielokrotna"`,
+  `"stempel"`) jest zarezerwowana w formacie, ale nieimplementowana.
+- Zmiana motywu przebudowuje wypalone warstwy (`wladcyCv`, `niczyjeCv`) —
+  inaczej zostają w starych kolorach po przełączeniu.
+- Wyjątki od "zero literałów" są jawnie udokumentowane w kodzie: kolor
+  panelu błędu startu (musi przeżyć NIEUDANE wczytanie motywu — ale nadal
+  przez zmienną CSS, nie literał), szarości wewnątrz generatorów tekstur
+  (z definicji zostają w kodzie) i przezroczysty środek gradientu winiety
+  (`"transparent"` to definicja winiety, nie wybór koloru).
+
 ## Pomysły zaakceptowane kierunkowo (do dyskusji przed implementacją)
 
 - Ziarna powiatów z prawdziwych miast (Natural Earth `populated_places` +

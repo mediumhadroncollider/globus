@@ -1,0 +1,46 @@
+{
+  "nazwa": "Pergamin",
+  "klasaCss": "motyw-pergamin",
+  "_uwaga": "Stylistyka Kartografa III — ciepły, sepiowy pergamin zamiast chłodnej mapy współczesnej.",
+
+  "tlo": {
+    "morze": "#8f7d54",
+    "niczyje": "#b6a978",
+    "poza": "#241a0e"
+  },
+
+  "panstwa": {
+    "nasycenie": 0.85,
+    "jasnosc": 1.05,
+    "krycie": 0.92,
+    "proceduralNasycenie": 0.3,
+    "proceduralJasnosc": 0.62
+  },
+
+  "mapaCiepla": { "od": [90, 72, 42], "do": [222, 168, 64] },
+
+  "kreski": {
+    "wybrzeze":       { "kolor": "rgba(42,33,20,.85)",  "szerokosc": 2.8, "technika": "prosta" },
+    "granicaPanstwa": { "kolor": "rgba(58,32,16,.85)",  "szerokosc": 3.2, "technika": "prosta" },
+    "granicaZiemi":   { "kolor": "rgba(50,40,20,.45)",  "szerokosc": 0.9, "technika": "prosta" },
+    "rzeka":          { "kolor": "#3d6f8a",             "szerokosc": 1.4, "technika": "prosta" },
+    "wybrzezeNE":     { "kolor": "rgba(180,40,30,.85)", "szerokosc": 1.3, "technika": "prosta", "kreskowanie": [5, 4] }
+  },
+  "kreskaZaokraglona": true,
+
+  "edytor": {
+    "znacznikKorekty": { "kolor": "#b8341f", "promien": 3.4 }
+  },
+
+  "tekstura": { "rodzaj": "papier", "krycie": 0.35, "kotwica": "ekran", "skala": 1.0 },
+  "winieta":  { "wlaczona": true, "sila": 0.35, "kolor": "#2a1c0d" },
+
+  "etykiety": {
+    "kroj": "Georgia, serif",
+    "rozmiar": 14,
+    "swiatlo": "0.18em",
+    "aureola": "rgba(42,33,20,.85)",
+    "kolor": "#f6efdc",
+    "staleWzgledemEkranu": true
+  }
+}

@@ -331,3 +331,51 @@ ranking/link do edytora widoczne, WebSocket łączy się), edytor nie ma
 żadnego z tych elementów i nie łączy się z siecią wcale. Wszystkie
 niezmienniki Pythona (`test_ciesnin.py`, `test_scenariusz.py`) nie zostały
 dotknięte — cała zmiana mieści się w `static/index.html`.
+
+## 2026-07-20 — zadanie 0007: motywy — style mapy jako dane, nie stałe w kodzie
+
+Co zrobione: nowy katalog `static/motywy/` — `motywy.css` (16 zmiennych CSS
+per klasa `.motyw-*`, dla interfejsu) i trzy pliki JSON (`wspolczesny.json`
+= 1:1 dawny wygląd, `pergamin.json` = ciepła sepiowa mapa z ziarnem papieru
+i winietą, `sztabowka.json` = szkic ostrej, monochromatycznej kreski XIX w.
+z kreskami BEZ zaokrąglenia). `index.html` wczytuje motyw JSON-em
+(`?motyw=`, domyślnie `wspolczesny`) i podmienia klasę na `<body>` — mapa
+i interfejs przełączają się jednym gestem. Wszystkie funkcje rysujące
+(`rysuj`, `wypalWladcow`, `wypalNiczyje`, `przebuduj*`) czytają teraz kolory/
+grubości/krycie z obiektu `motyw`, nigdy z literału. Kolor właściciela to
+teraz baza ze scenariusza (`meta.panstwa[i].kolor`) PRZETWORZONA przez
+`motyw.panstwa` (mnożniki nasycenia/jasności, konwersja RGB→HSL→RGB) —
+scenariusz mówi kto jest złoty, motyw mówi jak wygląda złoty. Podświetlenie
+jednostki pod kursorem świadomie NIE trafiło do JSON-a motywu — żyje jako
+zmienna CSS `--akcent-podswietlenie` w `motywy.css`, czytana przez canvas
+przez `getComputedStyle(document.body)` (dokładnie ten przypadek "jedna
+paleta" z brief-u). Doszedł generyczny mechanizm tekstury (generator PO
+NAZWIE: `brak`/`papier`/`len`, kafelek budowany raz i tapetowany jako
+`CanvasPattern`, kotwica `ekran` kontra `świat`) i winiety (radialny
+gradient w przestrzeni ekranu). W edytorze (`?edytor=1`) doszła rozwijana
+lista motywów przełączająca styl NA ŻYWO, bez przeładowania — zmiana
+przelicza kolory władców i przebudowuje `wladcyCv`/`niczyjeCv`, inaczej
+wypalone warstwy zostałyby w starych kolorach.
+
+Miara rozproszenia: z `static/index.html` wyciągnięto 39 literałów koloru
+(hex/rgba) plus komplet literałów grubości kreski i dwa literały
+`lineJoin`/`lineCap` — rozsiane po jednym bloku `<style>` i dziewięciu
+osobnych miejscach w kodzie rysującym. Zostały wyłącznie udokumentowane
+wyjątki: kolory diagnostycznego panelu błędu startu (muszą przeżyć
+NIEUDANE wczytanie motywu, więc trafiły do `--blad`/`.blad`, ale nadal przez
+zmienną, nie literał), szarości WEWNĄTRZ generatorów tekstur (brief 0007
+wprost: "same generatory zostają w kodzie") i przezroczysty środek winiety
+(`"transparent"` to definicja winiety, nie wybór koloru).
+
+Co zaskoczyło: `#suwak-box` miał WŁASNY, czwarty odcień szarości
+(`#b8b0a0`), różny od `.szary` (`#8a8272`) — bez uważnego porównania linia
+po linii łatwo byłoby go po cichu scalić z `--tekst-przygaszony` i
+niepostrzeżenie zmienić wygląd "1:1" motywu współczesnego. Dodana osobna
+zmienna `--tekst-drugorzedny`. Zweryfikowane w Playwright: `wspolczesny.json`
+daje piksel w piksel to samo, co plik SPRZED zmiany (screenshot vs
+screenshot na tej samej klatce animacji ticków), `pergamin`/`sztabówka`
+wyglądają zauważalnie inaczej (mapa i pasek), przełącznik motywu w
+edytorze działa bez przeładowania i poprawnie przebudowuje wypalone
+warstwy. `grep`-em po funkcjach rysujących potwierdzone: zero literałów
+koloru/grubości poza udokumentowanymi wyjątkami. `test_ciesnin.py` i
+`test_scenariusz.py` przechodzą bez zmian (zero dotkniętego Pythona).
