@@ -1,0 +1,72 @@
+/* ===========================================================================
+   motywy.css — PALETA INTERFEJSU, jedna na motyw.
+
+   Zasada z CLAUDE.md ("Motywy"): motyw to DANE, renderer to implementacja.
+   Ten plik jest połową tej umowy — deklaruje, JAK ma wyglądać interfejs
+   (panele, przyciski, typografia) przez zmienne CSS na klasie `.motyw-*`
+   ustawianej na <body>. Druga połowa (JAK ma wyglądać MAPA) leży w
+   static/motywy/<nazwa>.json i jest czytana przez index.html.
+
+   Mapa i interfejs dzielą TĘ SAMĄ paletę: canvas czyta wybrane zmienne stąd
+   przez getComputedStyle(document.body) tam, gdzie kolor ma być wspólny
+   (np. --akcent-podswietlenie — podświetlenie jednostki pod kursorem).
+   Dzięki temu zmiana motywu przestawia mapę i interfejs JEDNYM przełącznikiem
+   klasy, bez dwóch osobnych źródeł prawdy dla tego samego koloru.
+   =========================================================================== */
+
+.motyw-wspolczesny {
+  --tlo-strony: #10151b;
+  --tlo-panel: rgba(16, 20, 26, .9);
+  --tlo-panel-solid: #171d24;
+  --ramka-pasek: #2a2f36;
+  --ramka-panel: #3a3f47;
+  --ramka-przycisk: #4a4438;
+  --tekst: #e8e2d2;
+  --tekst-przycisk: #d8d2c2;
+  --tekst-przygaszony: #8a8272;
+  --tekst-drugorzedny: #b8b0a0;
+  --akcent: #c9a227;
+  --akcent-tekst: #171512;
+  --akcent-podswietlenie: rgba(255, 250, 235, .22);
+  --akcent-edytor: #e0734a;
+  --blad: #e07050;
+  --kroj-ui: Georgia, serif;
+}
+
+.motyw-pergamin {
+  --tlo-strony: #1b140c;
+  --tlo-panel: rgba(36, 31, 22, .92);
+  --tlo-panel-solid: #241f16;
+  --ramka-pasek: #4a3d28;
+  --ramka-panel: #57492f;
+  --ramka-przycisk: #6b5636;
+  --tekst: #e6dcc2;
+  --tekst-przycisk: #ddd0ac;
+  --tekst-przygaszony: #a3906a;
+  --tekst-drugorzedny: #c2b088;
+  --akcent: #c9a24f;
+  --akcent-tekst: #241a08;
+  --akcent-podswietlenie: rgba(255, 244, 214, .28);
+  --akcent-edytor: #c65a33;
+  --blad: #d2603f;
+  --kroj-ui: Georgia, serif;
+}
+
+.motyw-sztabowka {
+  --tlo-strony: #14181c;
+  --tlo-panel: rgba(20, 24, 20, .92);
+  --tlo-panel-solid: #1b201c;
+  --ramka-pasek: #38423a;
+  --ramka-panel: #414d43;
+  --ramka-przycisk: #4d5a4f;
+  --tekst: #dbe4da;
+  --tekst-przycisk: #c7d4c9;
+  --tekst-przygaszony: #7c8a7e;
+  --tekst-drugorzedny: #a3b0a5;
+  --akcent: #9aa53c;
+  --akcent-tekst: #12160f;
+  --akcent-podswietlenie: rgba(220, 230, 200, .22);
+  --akcent-edytor: #b2542f;
+  --blad: #c25a3a;
+  --kroj-ui: "Courier New", ui-monospace, monospace;
+}

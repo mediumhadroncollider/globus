@@ -99,6 +99,74 @@ robi kopię `korekty.json.bak` przed nadpisaniem). Zmiana widoczna w grze
 dopiero po restarcie serwera — edytor nie przeładowuje stanu symulacji na
 żywo.
 
+## Motywy (styl mapy jako dane)
+
+Zasada: **motyw to DANE, renderer to implementacja** — jak arkusz stylów i
+przeglądarka. `static/index.html` nie ma w kodzie rysującym ani jednego
+literału koloru/grubości/krycia — wszystko czyta z motywu.
+
+```
+static/motywy/
+  motywy.css          ← zmienne CSS interfejsu (panele, przyciski, typografia),
+                         po jednej klasie .motyw-<nazwa> na body
+  wspolczesny.json     ← domyślny, 1:1 wygląd sprzed zadania 0007
+  pergamin.json        ← ciepła, sepiowa mapa z ziarnem papieru i winietą
+  sztabowka.json       ← szkic: ostra, monochromatyczna kreska XIX w.
+```
+
+**Przełączanie:** `?motyw=pergamin` w adresie (domyślnie `wspolczesny`).
+W edytorze świata (`?edytor=1`) dodatkowo rozwijana lista **motyw** w pasku —
+przełącza styl NA ŻYWO, bez przeładowania strony (to narzędzie do
+porównywania wariantów, nie zapisuje się nigdzie).
+
+**Podział odpowiedzialności:** scenariusz mówi KTO jest złoty
+(`panstwa.kent.kolor` w danych scenariusza — tożsamość bytu politycznego,
+wspólna dla wszystkich motywów). Motyw mówi JAK wygląda złoty — czyta ten
+kolor bazowy i go PRZETWARZA (mnożniki nasycenia/jasności w `panstwa`,
+konwersja RGB→HSL→RGB), nie zastępuje.
+
+**Co jest w pliku JSON motywu** (patrz `wspolczesny.json` — najlepszy
+przykład wszystkich pól naraz):
+
+- `klasaCss` — klasa dopisywana do `<body>`; steruje `motywy.css`.
+- `tlo.morze/niczyje/poza` — kolory tła (morze pod mapą, ziemia niczyja,
+  obszar poza granicami świata przy oddaleniu).
+- `panstwa.nasycenie/jasnosc/krycie` — mnożniki nakładane na kolor
+  właściciela ze scenariusza. `proceduralNasycenie/proceduralJasnosc` —
+  BAZOWE HSL używane tylko w trybie proceduralnym (bez scenariusza, nie ma
+  koloru do przetworzenia).
+- `mapaCiepla.od/do` — dwa kolory RGB (tablice `[r,g,b]`) do lerpu w
+  widokach Populacja/Dochód.
+- `kreski.*` — `wybrzeze`, `granicaPanstwa`, `granicaZiemi`, `rzeka` (edytor),
+  `wybrzezeNE` (edytor, pomoc porównawcza z Natural Earth): każda ma
+  `kolor`, `szerokosc` (w pikselach EKRANU — dzielone przez zoom przy
+  rysowaniu) i `technika` (na razie zawsze `"prosta"`; pole zarezerwowane
+  pod przyszłe `"wielokrotna"`/`"stempel"`). `wybrzezeNE` dodatkowo ma
+  `kreskowanie` (wzór przerywanej linii).
+- `kreskaZaokraglona` — `true`/`false`, sterują `lineJoin`/`lineCap` całej
+  mapy (sztabówka celowo ma `false` — "ostra kreska").
+- `edytor.znacznikKorekty` — kolor/promień kropki oznaczającej ręczną korektę.
+- `tekstura.rodzaj` — nazwa GENERATORA (`"brak"`, `"papier"`, `"len"`);
+  same generatory zostają w kodzie (`index.html`, funkcje `kafelekPapier`/
+  `kafelekLen`) — JSON tylko wybiera, po nazwie, tak jak `background-image`
+  w CSS. `krycie`, `kotwica` (`"ekran"` = ziarno stoi w miejscu, `"swiat"` =
+  skaluje się z mapą), `skala`.
+- `winieta.wlaczona/sila/kolor` — przyciemnienie krawędzi kadru (radialny
+  gradient w przestrzeni ekranu, nie mapy).
+- `etykiety.*` — zarezerwowane pod przyszłe podpisy na mapie (dziś canvas
+  nie rysuje żadnego tekstu, więc te pola są nieużywane, ale format już na
+  nie czeka, żeby nie przebudowywać go później).
+
+**Wyjątek:** podświetlenie jednostki pod kursorem NIE jest polem JSON-a —
+żyje jako zmienna CSS `--akcent-podswietlenie` w `motywy.css`, a canvas
+czyta ją przez `getComputedStyle(document.body)`. To świadomy wybór: mapa
+i interfejs dzielą TĘ SAMĄ paletę (przez zmienne CSS), więc kolor
+współdzielony między nimi ma jedno źródło prawdy, nie dwa (JSON + CSS).
+
+Dopisanie nowego motywu: skopiuj `wspolczesny.json`, zmień `nazwa`/
+`klasaCss`, dopisz odpowiadającą klasę w `motywy.css`, wypełnij pola wg
+opisu wyżej — żadnych zmian w `index.html` nie trzeba.
+
 ## Pomysły na następne kroki (rosnąca trudność)
 
 - **Suwaki**: drugi parametr per królestwo (np. nakłady na infrastrukturę
