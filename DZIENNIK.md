@@ -236,3 +236,98 @@ akurat istnieje naturalny mały odprysk do przypięcia (sprawdziłem: przy
 bieżącym ziarnie żaden się nie trafia), więc łapią regresję niezależnie od
 przyszłych zmian generatora. Wszystkie niezmienniki (`test_ciesnin.py`,
 1–7 `test_scenariusz.py`) przechodzą.
+
+## 2026-07-20 — zadania 0005 + 0006: edytor tylko do edycji, klik zamiast malowania
+
+Dwa briefy zrealizowane razem, bo dotykają dokładnie tego samego kodu
+(`static/index.html`, interakcja myszą i pasek edytora) — rozdzielanie ich na
+osobne przebiegi wymagałoby przechodzenia przez te same funkcje dwa razy.
+
+**0005 (klik edytuje, przeciągnięcie przesuwa).** Ujednolicony jeden
+mechanizm progu przeciągania (`PROG_PX`, istniejący od zadania 0002) dla
+GRY i EDYTORA: `pointerdown` już nie rozgałęzia się na `EDYTOR && button===0`,
+tylko zawsze zapisuje punkt startowy; `pointerup` sam rozstrzyga na końcu, czy
+to był klik (`!przeciagam`) czy przeciągnięcie. W edytorze klik = jedna
+operacja narzędzia na komórce/krawędzi pod kursorem, przeciągnięcie = pan,
+tak jak w grze. Zniknęło malowanie z `pointermove`, `dotknieteWTymPociagnieciu`
+i `edytorAktywny` — nie były już nigdzie potrzebne, skoro nie ma serii zmian
+w trakcie jednego ruchu myszy. Pędzel (`promienPedzla`, `[`/`]`, `komorkiPedzla`)
+usunięty w całości — jedno kliknięcie = jedna komórka, zgodnie z briefem
+("korekt jest i będzie kilkanaście, nie tysiące"). Doszło szóste narzędzie,
+**Nawigacja**, domyślne po wejściu do edytora (klik nic nie robi — rozglądanie
+się po mapie jest bezpieczne od razu, bez wybierania niczego) oraz `Esc`,
+który do niej wraca z dowolnego narzędzia.
+
+**Pomiar z Change 4 (kluczowe odkrycie sesji).** Brief każe najpierw zmierzyć,
+czy po Zmianie 1 pojedynczy klik nadal zauważalnie zwalnia, zanim ruszać
+z celowaną przebudową. Zmierzyłem licznikiem `F` i osobną instrumentacją
+`performance.now()` wokół każdego etapu `zaplanujPrzebudowe()` (Playwright,
+headless Chromium, ten kontener) — i owszem, zwalniało DRASTYCZNIE: jedno
+kliknięcie kosztowało **~4,6 s** end-to-end, z czego **~4,0 s** samo
+`przebudujGeometrie()` (pętla `voronoi.renderCell()` po WSZYSTKICH N=60 000
+komórkach świata, żeby przemalować Path2D 16 ziem + ziemi niczyjej), podczas
+gdy pętla po krawędziach (halfedges ~360 tys.) kosztowała ~50 ms, a samo
+rysowanie (`rysuj()`) — ~650 ms niezależnie od liczby kliknięć (to koszt
+malowania canvasu, identyczny jak przy zwykłym panoramowaniu w grze, poza
+zakresem tego briefu). Czyli DOKŁADNIE przypadek opisany w Zmianie 4:
+poszedłem w celowaną przebudowę.
+
+Implementacja: `przebudujGeometrie()` rozbita na `przebudujWypelnienia()`
+(Path2D komórek — kosztowna część) i `przebudujKrawedzie()` (Path2D
+granic/rzek/mapa krawędzi dla trafień myszą — tania, zawsze pełna, bo
+`Nie optymalizować na zapas` — 50 ms nie boli). `zastosujDoZywegoStanu()`
+(jedyne miejsce, które mutuje żywe `lad`/`komZiemia`) liczy "kubełek"
+komórki (jednostka/ziemia niczyja/`null`=woda) PRZED i PO zmianie i różnicę
+zgłasza do `brudneJednostki`/`brudneNiczyje`. `przebudujWypelnienia()` przy
+kolejnych wywołaniach odbudowuje WYŁĄCZNIE Path2D brudnych kubełków (przy
+jednym kliku to 1–2 jednostki, czasem niczyje) zamiast wszystkich — pętla po
+N komórek zostaje (tania, ~kilka ms), ale `voronoi.renderCell()` wywołuje się
+tylko dla komórek NALEŻĄCYCH do brudnych kubełków. Pierwsze wywołanie
+(start strony) i tak jest pełne (`pelnaPrzebudowaWypelnien`). Przy okazji:
+wywołanie po wczytaniu korekt z poprzedniej sesji (dawniej pełne
+`przebudujGeometrie()` "żeby domalować rzeki") zamieniłem na samo
+`przebudujKrawedzie()` — komórki przychodzą już poprawione z serwera
+(`server.py`/`sim.py` nakładają `korekty.json` przy budowie świata), więc
+pełna przebudowa wypełnień na starcie edytora była tam czystym marnotrawstwem
+(kolejne ~4 s zaoszczędzone na każdym wejściu do `?edytor=1`).
+
+**Wynik pomiaru po poprawce:** to samo pojedyncze kliknięcie —
+`przebudujGeometrie()` spadło z ~4000 ms do **~50–65 ms** (przyspieszenie
+~70–80×), niezależnie od poziomu zoomu. Zweryfikowane też funkcjonalnie:
+Ctrl+Z nadal cofa całą operację, narzędzie Przynależność (dotyka DWÓCH
+jednostek naraz — starej i nowej) poprawnie brudzi oba kubełki, zapis →
+restart/reload → korekta wraca z serwera i renderuje się poprawnie (pełna
+przebudowa przy starcie). Bezwzględne liczby w tym kontenerze (sandboxowany,
+współdzielony CPU) są prawdopodobnie znacznie gorsze niż na zwykłym
+laptopie, ale relacja PRZED/PO (i to, że problem był realny, nie wyimaginowany)
+powinna się przenosić.
+
+**0006 (edytor tylko do edycji).** Zasada z briefu: edytor dotyczy ŚWIATA,
+gra dotyczy STANU. W `if (EDYTOR) {...}` (ta sama sekcja, która już wcześniej
+włączała pasek edytora) doszło: ukrycie przełącznika widoków (Władcy/
+Populacja/Dochód), etykiety i selecta "Grasz jako", suwaka podatku oraz
+panelu rankingu (`style.display = "none"` po ID — nic nie usuwane na stałe,
+zgodnie z kryterium "gra bez zmian"). WebSocket (`let ws = null` zamiast
+`const ws = new WebSocket(...)`) otwiera się TERAZ wyłącznie w
+`if (!EDYTOR) {...}` — sprawdzone w Playwright nasłuchem zdarzenia
+`page.on("websocket", ...)`: w grze jedno połączenie `ws://.../ws`, w
+edytorze zero, potwierdzone też logiem serwera (`WebSocket /ws [accepted]`
+pojawia się tylko dla ładowań `/`, nigdy dla `/?edytor=1`). Shift+klik
+(podbój) obsłużony przez wcześniejszy wspólny refaktor pointerup: w
+edytorze gałąź `if (EDYTOR) {...; return;}` kończy obsługę PRZED kodem
+podboju, więc Shift+klik w edytorze nic nie wysyła (i nie może — `ws` tam
+i tak jest `null`). Panel informacyjny dostał osobną funkcję
+`budujInfoEdytora()` (lon/lat, ląd/woda, jednostka, właściciel, status
+korekty — bez populacji/dochodu) zamiast dawnego dopisku na końcu wspólnej
+`odswiezInfo()`; dodatkowo teraz odświeża się OD RAZU po kliknięciu (dawniej
+trzeba było poruszyć myszą, żeby zobaczyć nowy stan komórki). Tytuł zmienia
+się na "HEGEMON · EDYTOR ŚWIATA" (bursztynowy akcent), doszły linki
+przełączające tryb w obie strony: "Edytor" w grze (dyskretny, prawy róg
+paska), "Do gry" w edytorze.
+
+Zweryfikowane w Playwright (headless Chromium, oba tryby, ekran + log
+serwera): gra wygląda i działa identycznie jak przed zmianą (suwak/widoki/
+ranking/link do edytora widoczne, WebSocket łączy się), edytor nie ma
+żadnego z tych elementów i nie łączy się z siecią wcale. Wszystkie
+niezmienniki Pythona (`test_ciesnin.py`, `test_scenariusz.py`) nie zostały
+dotknięte — cała zmiana mieści się w `static/index.html`.

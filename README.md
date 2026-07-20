@@ -65,6 +65,40 @@ ubezpieczenie na inne gęstości. Weryfikację najlepiej robić testem BFS
 ("z Palermo nie da się dojść lądem do Reggio") — wzór masz w historii
 naszej rozmowy; warto go wkleić do stałego zestawu testów projektu.
 
+## Edytor świata w przeglądarce (`?edytor=1`)
+
+Adres: **http://127.0.0.1:8000/?edytor=1** (w grze prowadzi do niego
+dyskretny link „Edytor" w prawym rogu paska; z edytora „Do gry" wraca na `/`).
+
+Edytor dotyczy **świata** (geografia, przynależność ziem, cieśniny, rzeki),
+nigdy **stanu** (populacja, skarbce, podatki, podboje, ticki) — te dwie
+kategorie są celowo rozdzielone:
+
+- w edytorze nie ma suwaka podatku, wyboru „Grasz jako", przełącznika widoków
+  ani panelu rankingu — edytor zawsze pokazuje widok polityczny;
+- karta w trybie edytora **w ogóle nie łączy się z WebSocketem** — bez
+  ticków, bez rankingu, bez map ciepła nie ma po co; Shift+klik (podbój w
+  grze) w edytorze nic nie robi.
+
+Narzędzia (pasek u góry): **Nawigacja** (domyślne po wejściu — kliknięcia
+niczego nie zmieniają, mapa jest do oglądania), **Ląd/woda**,
+**Przynależność** (+ wybór państwa/ziemi docelowej; Alt+klik = do niczyich),
+**Cieśnina**, **Rzeka**, **Gumka** (usuwa korektę wskazanej komórki/krawędzi).
+
+Sterowanie: **lewy przycisk myszy** obsługuje jedno i drugie — kliknięcie
+(bez ruchu) stosuje aktywne narzędzie do komórki/krawędzi pod kursorem,
+przeciągnięcie panoramuje mapę (żadne narzędzie się nie odpala). Jedno
+kliknięcie = jedna komórka — nie ma malowania przeciągnięciem, bo korekt są
+i będą dosłownie dziesiątki, nie tysiące. **Esc** wraca do Nawigacji.
+**Ctrl+Z** cofa ostatnią operację. Panel informacyjny pod kursorem pokazuje
+lon/lat, ląd/wodę, jednostkę i właściciela oraz czy komórka ma już korektę
+(i jaką) — nigdy populację ani dochód, bo to nie należy do świata.
+
+Przycisk **Zapisz** wysyła zebrane korekty do `POST /api/korekty` (serwer
+robi kopię `korekty.json.bak` przed nadpisaniem). Zmiana widoczna w grze
+dopiero po restarcie serwera — edytor nie przeładowuje stanu symulacji na
+żywo.
+
 ## Pomysły na następne kroki (rosnąca trudność)
 
 - **Suwaki**: drugi parametr per królestwo (np. nakłady na infrastrukturę
